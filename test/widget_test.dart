@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_map/flutter_map.dart';
-import 'package:mmaps_flutter/main.dart';
+import 'package:mmaps_flutter/screens/map_home_page.dart';
 
 void main() {
   testWidgets('map view shows its toolbar and map controls', (
@@ -12,7 +12,9 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
 
-    await tester.pumpWidget(const MyApp());
+    await tester.pumpWidget(
+      const MaterialApp(home: MapHomePage(loadSavedLibrary: false)),
+    );
 
     expect(find.byTooltip('Pusatkan GPS'), findsOneWidget);
     expect(find.byTooltip('Tambah Titik'), findsOneWidget);
@@ -32,8 +34,9 @@ void main() {
     expect(find.text('Layers'), findsOneWidget);
     expect(find.text('Active Layers'), findsOneWidget);
     expect(find.text('Belum ada layer aktif'), findsOneWidget);
-    expect(find.text('Maps Library'), findsNWidgets(2));
+    expect(find.text('Maps Library'), findsOneWidget);
     expect(find.text('Basemap'), findsOneWidget);
+    expect(find.text('Import Maps'), findsOneWidget);
     expect(find.text('© OpenStreetMap'), findsNothing);
 
     await tester.tap(find.text('Basemap'));

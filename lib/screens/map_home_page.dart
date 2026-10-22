@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_compass/flutter_compass.dart';
@@ -8,6 +9,9 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 
+import '../models/imported_map.dart';
+import '../services/kml_import_service.dart';
+import '../services/map_file_store.dart';
 import '../views/layers_view.dart';
 import '../widgets/active_layers_overlay.dart';
 import '../widgets/crosshair.dart';
@@ -17,7 +21,9 @@ import '../widgets/opacity_control.dart';
 import '../widgets/tools_popup.dart';
 
 class MapHomePage extends StatefulWidget {
-  const MapHomePage({super.key});
+  final bool loadSavedLibrary;
+
+  const MapHomePage({super.key, this.loadSavedLibrary = true});
 
   @override
   State<MapHomePage> createState() => _MapHomePageState();
@@ -25,6 +31,7 @@ class MapHomePage extends StatefulWidget {
 
 class _MapHomePageState extends State<MapHomePage> {
   final MapController _mapController = MapController();
+  final KmlImportService _kmlImportService = KmlImportService();
   StreamSubscription<Position>? _positionSubscription;
   StreamSubscription<CompassEvent>? _compassSubscription;
 
@@ -36,6 +43,9 @@ class _MapHomePageState extends State<MapHomePage> {
   String _gpsStatus = 'GPS mati';
   bool _gpsBusy = false;
   bool _gpsActive = false;
+  List<ImportedMap> _importedMaps = [];
+  bool _loadingMaps = true;
+  bool _importingMap = false;
 
   // State mode
   bool _showToolsPopup = false;
@@ -48,6 +58,11 @@ class _MapHomePageState extends State<MapHomePage> {
   @override
   void initState() {
     super.initState();
+    if (widget.loadSavedLibrary) {
+      unawaited(_loadMapLibrary());
+    } else {
+      _loadingMaps = false;
+    }
     if (!kIsWeb &&
         (defaultTargetPlatform == TargetPlatform.android ||
             defaultTargetPlatform == TargetPlatform.iOS)) {
@@ -73,6 +88,7 @@ class _MapHomePageState extends State<MapHomePage> {
 
   @override
   Widget build(BuildContext context) {
+    final activeMaps = _importedMaps.where((map) => map.isActive).toList();
     return Scaffold(
       extendBodyBehindAppBar: !_showLayersView,
       // ===== TOOLBAR ATAS =====
@@ -160,6 +176,12 @@ class _MapHomePageState extends State<MapHomePage> {
           ? LayersView(
               selectedTab: _selectedLibraryTab,
               onTabChanged: (tab) => setState(() => _selectedLibraryTab = tab),
+              maps: _importedMaps,
+              onImportMap: _importMap,
+              onToggleMap: _toggleMapActive,
+              onRemoveMap: _removeMap,
+              importing: _importingMap,
+              loading: _loadingMaps,
             )
           : Stack(
               children: [
@@ -190,6 +212,65 @@ class _MapHomePageState extends State<MapHomePage> {
                           'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                       userAgentPackageName: 'id.mmaps.app',
                     ),
+                    if (activeMaps.any((map) => map.overlays.isNotEmpty))
+                      OverlayImageLayer(
+                        overlayImages: [
+                          for (final map in activeMaps)
+                            for (final overlay in map.overlays)
+                              OverlayImage(
+                                imageProvider: MemoryImage(overlay.bytes),
+                                bounds: overlay.bounds,
+                                opacity: _opacity / 100,
+                              ),
+                        ],
+                      ),
+                    if (activeMaps.any((map) => map.polygons.isNotEmpty))
+                      PolygonLayer(
+                        polygons: [
+                          for (final map in activeMaps)
+                            for (final feature in map.polygons)
+                              Polygon(
+                                points: feature.points,
+                                holePointsList: feature.holes,
+                                color: feature.fillColor,
+                                borderColor: feature.borderColor,
+                                borderStrokeWidth: 2,
+                                label: feature.name,
+                              ),
+                        ],
+                      ),
+                    if (activeMaps.any((map) => map.lines.isNotEmpty))
+                      PolylineLayer(
+                        polylines: [
+                          for (final map in activeMaps)
+                            for (final feature in map.lines)
+                              Polyline(
+                                points: feature.points,
+                                color: feature.color,
+                                strokeWidth: feature.width,
+                              ),
+                        ],
+                      ),
+                    if (activeMaps.any((map) => map.points.isNotEmpty))
+                      MarkerLayer(
+                        markers: [
+                          for (final map in activeMaps)
+                            for (final feature in map.points)
+                              Marker(
+                                point: feature.point,
+                                width: 34,
+                                height: 40,
+                                child: Tooltip(
+                                  message: feature.name,
+                                  child: Icon(
+                                    Icons.location_on,
+                                    color: feature.color,
+                                    size: 34,
+                                  ),
+                                ),
+                              ),
+                        ],
+                      ),
                     if (_gpsPosition != null)
                       CircleLayer(
                         circles: [
@@ -243,12 +324,12 @@ class _MapHomePageState extends State<MapHomePage> {
                 ),
 
                 // 4) Active layers overlay (kiri atas)
-                const Positioned(
+                Positioned(
                   left: 12,
                   top: 12,
                   child: ActiveLayersOverlay(
-                    layers: [],
-                  ), // TODO: isi dari state
+                    layers: activeMaps.map((map) => map.name).toList(),
+                  ),
                 ),
 
                 // 5) Opacity control (kanan bawah atas GPS)
@@ -310,6 +391,149 @@ class _MapHomePageState extends State<MapHomePage> {
 
   void _closeToolsPopup() {
     setState(() => _showToolsPopup = false);
+  }
+
+  Future<void> _loadMapLibrary() async {
+    try {
+      final storedFiles = await MapFileStore.load();
+      final activeIds = await MapFileStore.loadActiveIds();
+      final maps = <ImportedMap>[];
+      final failedFiles = <String>[];
+
+      for (final file in storedFiles) {
+        try {
+          final map = _kmlImportService.parse(
+            id: file.id,
+            fileName: file.name,
+            bytes: file.bytes,
+          );
+          map.isActive = activeIds.contains(map.id);
+          maps.add(map);
+        } catch (error) {
+          failedFiles.add(file.name);
+        }
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _importedMaps = maps;
+        _loadingMaps = false;
+      });
+      final activeMaps = maps.where((map) => map.isActive);
+      if (!_showLayersView && activeMaps.isNotEmpty) {
+        await WidgetsBinding.instance.endOfFrame;
+        if (mounted) _fitMapToImportedMaps(activeMaps);
+      }
+      if (failedFiles.isNotEmpty) {
+        _showMapMessage(
+          'Gagal memuat ${failedFiles.length} file: ${failedFiles.join(', ')}.',
+        );
+      }
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _loadingMaps = false);
+      _showMapMessage('Tidak dapat memuat Maps Library: $error');
+    }
+  }
+
+  Future<void> _importMap() async {
+    if (_importingMap) return;
+    setState(() => _importingMap = true);
+
+    try {
+      final file = await FilePicker.pickFile(
+        dialogTitle: 'Import peta KML atau KMZ',
+        type: FileType.custom,
+        allowedExtensions: const ['kml', 'kmz'],
+      );
+      if (file == null) return;
+
+      final fileSize = await file.length();
+      if (fileSize != null && fileSize > 500 * 1024 * 1024) {
+        throw const FormatException('Ukuran file melebihi batas 500 MB.');
+      }
+      final bytes = await file.readAsBytes();
+      final id = DateTime.now().microsecondsSinceEpoch.toString();
+      final map = _kmlImportService.parse(
+        id: id,
+        fileName: file.name,
+        bytes: bytes,
+      );
+
+      await MapFileStore.save(
+        StoredMapFile(id: id, name: file.name, bytes: bytes),
+      );
+      if (!mounted) return;
+      setState(() => _importedMaps = [..._importedMaps, map]);
+      _showMapMessage('${map.name} berhasil ditambahkan ke Maps Library.');
+    } catch (error) {
+      if (mounted) _showMapMessage('Gagal mengimpor peta: $error');
+    } finally {
+      if (mounted) setState(() => _importingMap = false);
+    }
+  }
+
+  Future<void> _toggleMapActive(ImportedMap map) async {
+    final activate = !map.isActive;
+    setState(() => map.isActive = activate);
+
+    try {
+      final activeIds = _importedMaps
+          .where((item) => item.isActive)
+          .map((item) => item.id)
+          .toSet();
+      await MapFileStore.saveActiveIds(activeIds);
+    } catch (error) {
+      if (mounted) {
+        _showMapMessage(
+          'Layer berubah untuk sesi ini, tetapi statusnya tidak dapat disimpan: $error',
+        );
+      }
+    }
+
+    if (!activate || !mounted) return;
+    setState(() {
+      _showLayersView = false;
+      _showToolsPopup = false;
+    });
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
+    _fitMapToImportedMap(map);
+  }
+
+  Future<void> _removeMap(ImportedMap map) async {
+    try {
+      await MapFileStore.remove(map.id);
+      if (!mounted) return;
+      setState(() => _importedMaps.removeWhere((item) => item.id == map.id));
+      _showMapMessage('${map.name} dihapus dari Maps Library.');
+    } catch (error) {
+      if (mounted) _showMapMessage('Gagal menghapus peta: $error');
+    }
+  }
+
+  void _fitMapToImportedMap(ImportedMap map) {
+    _fitMapToImportedMaps([map]);
+  }
+
+  void _fitMapToImportedMaps(Iterable<ImportedMap> maps) {
+    final coordinates = maps.expand((map) => map.allCoordinates).toList();
+    if (coordinates.isEmpty) return;
+    final bounds = LatLngBounds.fromPoints(coordinates);
+    if (bounds.north == bounds.south && bounds.east == bounds.west) {
+      _mapController.move(bounds.center, math.max(_zoom, 16));
+      return;
+    }
+    _mapController.fitCamera(
+      CameraFit.bounds(bounds: bounds, padding: const EdgeInsets.all(48)),
+    );
+  }
+
+  void _showMapMessage(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> _centerOnGps() async {
