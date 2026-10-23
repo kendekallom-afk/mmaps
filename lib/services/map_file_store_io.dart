@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:path_provider/path_provider.dart';
 
@@ -14,9 +15,10 @@ Future<Directory> _libraryDirectory() async {
   return directory;
 }
 
-Future<List<StoredMapFile>> loadStoredMapFiles() async {
+/// Mengembalikan daftar metadata file (id, name, size) tanpa membaca isi bytes file
+Future<List<StoredMapFileInfo>> listStoredMapFiles() async {
   final directory = await _libraryDirectory();
-  final files = <StoredMapFile>[];
+  final files = <StoredMapFileInfo>[];
   await for (final entity in directory.list()) {
     if (entity is! File) continue;
     final storedName = entity.path.split(Platform.pathSeparator).last;
@@ -26,15 +28,44 @@ Future<List<StoredMapFile>> loadStoredMapFiles() async {
     final extension = originalName.split('.').last.toLowerCase();
     if (extension != 'kml' && extension != 'kmz') continue;
     final id = storedName.substring(0, separator);
+    final stat = await entity.stat();
     files.add(
-      StoredMapFile(
+      StoredMapFileInfo(
         id: id,
         name: originalName,
-        bytes: await entity.readAsBytes(),
+        size: stat.size,
       ),
     );
   }
   files.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+  return files;
+}
+
+/// Membaca bytes isi file berdasarkan [id] secara on-demand / lazy
+Future<Uint8List> readStoredMapFile(String id) async {
+  final directory = await _libraryDirectory();
+  await for (final entity in directory.list()) {
+    if (entity is! File) continue;
+    final fileName = entity.path.split(Platform.pathSeparator).last;
+    if (fileName.startsWith('$id--')) {
+      return await entity.readAsBytes();
+    }
+  }
+  throw StateError('File peta dengan ID $id tidak ditemukan di penyimpanan.');
+}
+
+/// Backward compatibility: memuat semua file beserta bytes
+Future<List<StoredMapFile>> loadStoredMapFiles() async {
+  final list = await listStoredMapFiles();
+  final files = <StoredMapFile>[];
+  for (final info in list) {
+    try {
+      final bytes = await readStoredMapFile(info.id);
+      files.add(StoredMapFile(id: info.id, name: info.name, bytes: bytes));
+    } catch (_) {
+      // Abaikan jika file tidak dapat dibaca
+    }
+  }
   return files;
 }
 

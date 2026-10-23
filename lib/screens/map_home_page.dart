@@ -446,22 +446,42 @@ class _MapHomePageState extends State<MapHomePage> {
 
   Future<void> _loadMapLibrary() async {
     try {
-      final storedFiles = await MapFileStore.load();
+      // 1. Ambil daftar file cepat (hanya id, name, size tanpa bytes)
+      final storedFiles = await MapFileStore.listStoredMapFiles();
       final activeIds = await MapFileStore.loadActiveIds();
       final maps = <ImportedMap>[];
       final failedFiles = <String>[];
 
-      for (final file in storedFiles) {
-        try {
-          final map = _kmlImportService.parse(
-            id: file.id,
-            fileName: file.name,
-            bytes: file.bytes,
+      for (final fileInfo in storedFiles) {
+        final isActive = activeIds.contains(fileInfo.id);
+        if (isActive) {
+          // Hanya file aktif yang dibaca bytes-nya dan di-parse saat awal
+          try {
+            final bytes = await MapFileStore.readStoredMapFile(fileInfo.id);
+            final map = _kmlImportService.parse(
+              id: fileInfo.id,
+              fileName: fileInfo.name,
+              bytes: bytes,
+            );
+            map.isActive = true;
+            maps.add(map);
+          } catch (error) {
+            failedFiles.add(fileInfo.name);
+          }
+        } else {
+          // File tidak aktif: buat placeholder instan tanpa membaca bytes ke RAM
+          maps.add(
+            ImportedMap(
+              id: fileInfo.id,
+              name: _cleanMapName(fileInfo.name),
+              fileName: fileInfo.name,
+              points: const [],
+              lines: const [],
+              polygons: const [],
+              overlays: const [],
+              isActive: false,
+            ),
           );
-          map.isActive = activeIds.contains(map.id);
-          maps.add(map);
-        } catch (error) {
-          failedFiles.add(file.name);
         }
       }
 
@@ -490,6 +510,10 @@ class _MapHomePageState extends State<MapHomePage> {
       setState(() => _loadingMaps = false);
       _showMapMessage('Tidak dapat memuat Maps Library: $error');
     }
+  }
+
+  String _cleanMapName(String fileName) {
+    return fileName.replaceAll(RegExp(r'\.(kml|kmz)$', caseSensitive: false), '');
   }
 
   Future<void> _importMap() async {
@@ -535,7 +559,40 @@ class _MapHomePageState extends State<MapHomePage> {
 
   Future<void> _toggleMapActive(ImportedMap map) async {
     final activate = !map.isActive;
-    setState(() => map.isActive = activate);
+    ImportedMap targetMap = map;
+
+    if (activate) {
+      // Lazy parsing: jika peta belum pernah di-parse, baca bytes dan parse sekarang!
+      final isLazyPlaceholder = map.points.isEmpty &&
+          map.lines.isEmpty &&
+          map.polygons.isEmpty &&
+          map.overlays.isEmpty;
+
+      if (isLazyPlaceholder) {
+        try {
+          final bytes = await MapFileStore.readStoredMapFile(map.id);
+          targetMap = _kmlImportService.parse(
+            id: map.id,
+            fileName: map.fileName,
+            bytes: bytes,
+          );
+        } catch (error) {
+          if (mounted) {
+            _showMapMessage('Gagal membaca/parse file ${map.fileName}: $error');
+          }
+          return;
+        }
+      }
+    }
+
+    targetMap.isActive = activate;
+
+    final index = _importedMaps.indexWhere((item) => item.id == map.id);
+    if (index != -1) {
+      _importedMaps[index] = targetMap;
+    }
+
+    setState(() {});
 
     try {
       final activeIds = _importedMaps
@@ -562,7 +619,7 @@ class _MapHomePageState extends State<MapHomePage> {
     });
     await WidgetsBinding.instance.endOfFrame;
     if (!mounted) return;
-    _fitMapToImportedMap(map);
+    _fitMapToImportedMap(targetMap);
   }
 
   Future<void> _removeMap(ImportedMap map) async {

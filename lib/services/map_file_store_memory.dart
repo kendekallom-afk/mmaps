@@ -1,7 +1,33 @@
+import 'dart:typed_data';
+
 import 'stored_map_file.dart';
 
 final Map<String, StoredMapFile> _files = {};
 Set<String> _activeIds = {};
+
+/// Mengembalikan daftar metadata file di memori tanpa duplikasi bytes
+Future<List<StoredMapFileInfo>> listStoredMapFiles() async {
+  final list = _files.values
+      .map(
+        (file) => StoredMapFileInfo(
+          id: file.id,
+          name: file.name,
+          size: file.bytes.lengthInBytes,
+        ),
+      )
+      .toList();
+  list.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+  return list;
+}
+
+/// Membaca bytes file berdasarkan [id]
+Future<Uint8List> readStoredMapFile(String id) async {
+  final file = _files[id];
+  if (file == null) {
+    throw StateError('File peta dengan ID $id tidak ditemukan.');
+  }
+  return file.bytes;
+}
 
 Future<List<StoredMapFile>> loadStoredMapFiles() async =>
     List.unmodifiable(_files.values);
