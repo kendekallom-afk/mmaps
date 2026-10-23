@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:flutter_map/flutter_map.dart';
+import 'package:maplibre_gl/maplibre_gl.dart' as ml;
 import 'package:mmaps_flutter/screens/map_home_page.dart';
 
 void main() {
@@ -25,7 +25,7 @@ void main() {
     expect(find.text('© OpenStreetMap'), findsOneWidget);
     expect(find.text('Lat: -2.670000\nLon: 118.890000'), findsOneWidget);
 
-    await tester.drag(find.byType(FlutterMap), const Offset(70, 0));
+    await tester.drag(find.byType(ml.MapLibreMap), const Offset(70, 0));
     await tester.pumpAndSettle();
     expect(find.text('Lat: -2.670000\nLon: 118.890000'), findsNothing);
 

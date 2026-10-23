@@ -5,13 +5,14 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_compass/flutter_compass.dart';
-import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:maplibre_gl/maplibre_gl.dart' as ml;
 
 import '../models/imported_map.dart';
 import '../services/kml_import_service.dart';
 import '../services/map_file_store.dart';
+import '../utils/geojson_helper.dart';
 import '../views/layers_view.dart';
 import '../widgets/active_layers_overlay.dart';
 import '../widgets/crosshair.dart';
@@ -30,10 +31,25 @@ class MapHomePage extends StatefulWidget {
 }
 
 class _MapHomePageState extends State<MapHomePage> {
-  final MapController _mapController = MapController();
+  // Controller MapLibre & status pemuatan
+  ml.MapLibreMapController? _mapController;
+  bool _isStyleLoaded = false;
+  bool _layersInitialized = false;
+
   final KmlImportService _kmlImportService = KmlImportService();
   StreamSubscription<Position>? _positionSubscription;
   StreamSubscription<CompassEvent>? _compassSubscription;
+
+  // Konstanta ID Source dan Layer
+  static const String _polySourceId = 'kml-polygons-source';
+  static const String _polyFillLayerId = 'kml-polygons-fill';
+  static const String _polyOutlineLayerId = 'kml-polygons-outline';
+
+  static const String _lineSourceId = 'kml-lines-source';
+  static const String _lineLayerId = 'kml-lines-layer';
+
+  static const String _pointSourceId = 'kml-points-source';
+  static const String _pointCircleLayerId = 'kml-points-circle';
 
   // State peta
   LatLng _center = const LatLng(-2.67, 118.89);
@@ -83,8 +99,145 @@ class _MapHomePageState extends State<MapHomePage> {
   void dispose() {
     unawaited(_positionSubscription?.cancel());
     unawaited(_compassSubscription?.cancel());
+    _mapController?.dispose();
     super.dispose();
   }
+
+  // ==========================================
+  // SIKLUS HIDUP MAPLIBRE SOURCES & STYLE LAYERS
+  // ==========================================
+
+  void _onMapCreated(ml.MapLibreMapController controller) {
+    _mapController = controller;
+  }
+
+  /// Dipanggil otomatis setelah style JSON (misal demotiles) selesai dimuat oleh engine MapLibre
+  void _onStyleLoaded() async {
+    _isStyleLoaded = true;
+    _layersInitialized = false; // Reset status saat style di-reload
+    await _syncMapLayers();
+
+    final activeMaps = _importedMaps.where((map) => map.isActive);
+    if (!_showLayersView && activeMaps.isNotEmpty) {
+      _fitMapToImportedMaps(activeMaps);
+    }
+  }
+
+  /// Menambahkan atau memperbarui GeoJSON sources & style layers di MapLibre
+  Future<void> _syncMapLayers() async {
+    if (!_isStyleLoaded || _mapController == null) return;
+
+    final activeMaps = _importedMaps.where((map) => map.isActive).toList();
+    final geoJsonData = GeoJsonHelper.fromImportedMaps(activeMaps);
+
+    try {
+      if (!_layersInitialized) {
+        // 1. Daftarkan GeoJSON Sources
+        await _mapController!.addGeoJsonSource(
+          _polySourceId,
+          geoJsonData.polygons,
+        );
+        await _mapController!.addGeoJsonSource(
+          _lineSourceId,
+          geoJsonData.lines,
+        );
+        await _mapController!.addGeoJsonSource(
+          _pointSourceId,
+          geoJsonData.points,
+        );
+
+        // 2. Tambahkan Fill Layer untuk interior poligon (Data-Driven Styling)
+        await _mapController!.addFillLayer(
+          _polySourceId,
+          _polyFillLayerId,
+          const ml.FillLayerProperties(
+            fillColor: ['get', 'fillColor'],
+            fillOpacity: ['get', 'fillOpacity'],
+          ),
+        );
+
+        // 2b. Tambahkan Line Layer untuk garis batas poligon
+        await _mapController!.addLineLayer(
+          _polySourceId,
+          _polyOutlineLayerId,
+          const ml.LineLayerProperties(
+            lineColor: ['get', 'borderColor'],
+            lineWidth: ['get', 'borderWidth'],
+          ),
+        );
+
+        // 3. Tambahkan Line Layer untuk polyline
+        await _mapController!.addLineLayer(
+          _lineSourceId,
+          _lineLayerId,
+          const ml.LineLayerProperties(
+            lineColor: ['get', 'color'],
+            lineWidth: ['get', 'width'],
+            lineOpacity: ['get', 'opacity'],
+            lineCap: 'round',
+            lineJoin: 'round',
+          ),
+        );
+
+        // 4. Tambahkan Circle Layer untuk titik (Marker)
+        await _mapController!.addCircleLayer(
+          _pointSourceId,
+          _pointCircleLayerId,
+          const ml.CircleLayerProperties(
+            circleColor: ['get', 'color'],
+            circleRadius: ['get', 'radius'],
+            circleOpacity: ['get', 'opacity'],
+            circleStrokeColor: '#FFFFFF',
+            circleStrokeWidth: 1.5,
+          ),
+        );
+
+        _layersInitialized = true;
+      } else {
+        // Jika layer sudah ada, perbarui data GeoJSON secara instan
+        await _mapController!.setGeoJsonSource(
+          _polySourceId,
+          geoJsonData.polygons,
+        );
+        await _mapController!.setGeoJsonSource(
+          _lineSourceId,
+          geoJsonData.lines,
+        );
+        await _mapController!.setGeoJsonSource(
+          _pointSourceId,
+          geoJsonData.points,
+        );
+      }
+    } catch (e) {
+      debugPrint('Error updating map layers: $e');
+    }
+  }
+
+  // ==========================================
+  // PELACAKAN KAMERA (IDLE LISTENER)
+  // ==========================================
+
+  void _onCameraIdle() {
+    final camera = _mapController?.cameraPosition;
+    if (camera == null) return;
+
+    final newCenter = LatLng(camera.target.latitude, camera.target.longitude);
+    final newZoom = camera.zoom;
+
+    // Hanya pemicu setState saat kamera berhenti bergerak (bebas frame drop)
+    if (_center.latitude != newCenter.latitude ||
+        _center.longitude != newCenter.longitude ||
+        _zoom != newZoom) {
+      setState(() {
+        _center = newCenter;
+        _zoom = newZoom;
+      });
+    }
+  }
+
+  // ==========================================
+  // BUILD METHOD
+  // ==========================================
 
   @override
   Widget build(BuildContext context) {
@@ -185,126 +338,26 @@ class _MapHomePageState extends State<MapHomePage> {
             )
           : Stack(
               children: [
-                // 1) Peta
-                FlutterMap(
-                  mapController: _mapController,
-                  options: MapOptions(
-                    initialCenter: _center,
-                    initialZoom: _zoom,
-                    onTap: (tapPosition, point) {
-                      setState(() {
-                        _addingWaypoint = false;
-                      });
-                      // TODO: kalau mode "tambah titik" aktif → tambah marker
-                    },
-                    onPositionChanged: (camera, hasGesture) {
-                      if (_center != camera.center || _zoom != camera.zoom) {
-                        setState(() {
-                          _center = camera.center;
-                          _zoom = camera.zoom;
-                        });
-                      }
-                    },
+                // 1) Peta MapLibre GL
+                ml.MapLibreMap(
+                  styleString: 'https://demotiles.maplibre.org/style.json',
+                  initialCameraPosition: ml.CameraPosition(
+                    target: ml.LatLng(_center.latitude, _center.longitude),
+                    zoom: _zoom,
                   ),
-                  children: [
-                    TileLayer(
-                      urlTemplate:
-                          'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                      userAgentPackageName: 'id.mmaps.app',
-                    ),
-                    if (activeMaps.any((map) => map.overlays.isNotEmpty))
-                      OverlayImageLayer(
-                        overlayImages: [
-                          for (final map in activeMaps)
-                            for (final overlay in map.overlays)
-                              OverlayImage(
-                                imageProvider: MemoryImage(overlay.bytes),
-                                bounds: overlay.bounds,
-                                opacity: _opacity / 100,
-                              ),
-                        ],
-                      ),
-                    if (activeMaps.any((map) => map.polygons.isNotEmpty))
-                      PolygonLayer(
-                        polygons: [
-                          for (final map in activeMaps)
-                            for (final feature in map.polygons)
-                              Polygon(
-                                points: feature.points,
-                                holePointsList: feature.holes,
-                                color: feature.fillColor,
-                                borderColor: feature.borderColor,
-                                borderStrokeWidth: 2,
-                                label: feature.name,
-                              ),
-                        ],
-                      ),
-                    if (activeMaps.any((map) => map.lines.isNotEmpty))
-                      PolylineLayer(
-                        polylines: [
-                          for (final map in activeMaps)
-                            for (final feature in map.lines)
-                              Polyline(
-                                points: feature.points,
-                                color: feature.color,
-                                strokeWidth: feature.width,
-                              ),
-                        ],
-                      ),
-                    if (activeMaps.any((map) => map.points.isNotEmpty))
-                      MarkerLayer(
-                        markers: [
-                          for (final map in activeMaps)
-                            for (final feature in map.points)
-                              Marker(
-                                point: feature.point,
-                                width: 34,
-                                height: 40,
-                                child: Tooltip(
-                                  message: feature.name,
-                                  child: Icon(
-                                    Icons.location_on,
-                                    color: feature.color,
-                                    size: 34,
-                                  ),
-                                ),
-                              ),
-                        ],
-                      ),
-                    if (_gpsPosition != null)
-                      CircleLayer(
-                        circles: [
-                          CircleMarker(
-                            point: LatLng(
-                              _gpsPosition!.latitude,
-                              _gpsPosition!.longitude,
-                            ),
-                            radius: _gpsPosition!.accuracy,
-                            useRadiusInMeter: true,
-                            color: Colors.blue.withValues(alpha: 0.12),
-                            borderColor: Colors.blue.withValues(alpha: 0.5),
-                            borderStrokeWidth: 1,
-                          ),
-                        ],
-                      ),
-                    if (_gpsPosition != null)
-                      MarkerLayer(
-                        markers: [
-                          Marker(
-                            point: LatLng(
-                              _gpsPosition!.latitude,
-                              _gpsPosition!.longitude,
-                            ),
-                            width: 24,
-                            height: 24,
-                            child: const GpsPositionMarker(),
-                          ),
-                        ],
-                      ),
-                    // TODO: OverlayImageLayer (WebP georef) — nanti
-                    // TODO: MarkerLayer (titik-titik) — nanti
-                    // TODO: PolylineLayer / PolygonLayer (ukur) — nanti
-                  ],
+                  trackCameraPosition: true,
+                  myLocationEnabled: _gpsActive,
+                  myLocationTrackingMode: ml.MyLocationTrackingMode.none,
+                  myLocationRenderMode: ml.MyLocationRenderMode.compass,
+                  onMapCreated: _onMapCreated,
+                  onStyleLoadedCallback: _onStyleLoaded,
+                  onCameraIdle: _onCameraIdle,
+                  onMapClick: (point, coordinates) {
+                    setState(() {
+                      _addingWaypoint = false;
+                    });
+                    // TODO: kalau mode "tambah titik" aktif → tambah marker
+                  },
                 ),
 
                 // 2) Crosshair di tengah
@@ -360,8 +413,6 @@ class _MapHomePageState extends State<MapHomePage> {
                       onSettings: _closeToolsPopup,
                     ),
                   ),
-
-                // 6) Measure box (tengah atas, hidden dulu) — TODO saat mode ukur aktif
               ],
             ),
     );
@@ -419,6 +470,11 @@ class _MapHomePageState extends State<MapHomePage> {
         _importedMaps = maps;
         _loadingMaps = false;
       });
+
+      if (_isStyleLoaded) {
+        await _syncMapLayers();
+      }
+
       final activeMaps = maps.where((map) => map.isActive);
       if (!_showLayersView && activeMaps.isNotEmpty) {
         await WidgetsBinding.instance.endOfFrame;
@@ -466,6 +522,10 @@ class _MapHomePageState extends State<MapHomePage> {
       if (!mounted) return;
       setState(() => _importedMaps = [..._importedMaps, map]);
       _showMapMessage('${map.name} berhasil ditambahkan ke Maps Library.');
+
+      if (_isStyleLoaded) {
+        await _syncMapLayers();
+      }
     } catch (error) {
       if (mounted) _showMapMessage('Gagal mengimpor peta: $error');
     } finally {
@@ -491,6 +551,10 @@ class _MapHomePageState extends State<MapHomePage> {
       }
     }
 
+    if (_isStyleLoaded) {
+      await _syncMapLayers();
+    }
+
     if (!activate || !mounted) return;
     setState(() {
       _showLayersView = false;
@@ -507,6 +571,10 @@ class _MapHomePageState extends State<MapHomePage> {
       if (!mounted) return;
       setState(() => _importedMaps.removeWhere((item) => item.id == map.id));
       _showMapMessage('${map.name} dihapus dari Maps Library.');
+
+      if (_isStyleLoaded) {
+        await _syncMapLayers();
+      }
     } catch (error) {
       if (mounted) _showMapMessage('Gagal menghapus peta: $error');
     }
@@ -518,14 +586,41 @@ class _MapHomePageState extends State<MapHomePage> {
 
   void _fitMapToImportedMaps(Iterable<ImportedMap> maps) {
     final coordinates = maps.expand((map) => map.allCoordinates).toList();
-    if (coordinates.isEmpty) return;
-    final bounds = LatLngBounds.fromPoints(coordinates);
-    if (bounds.north == bounds.south && bounds.east == bounds.west) {
-      _mapController.move(bounds.center, math.max(_zoom, 16));
+    if (coordinates.isEmpty || _mapController == null) return;
+
+    double minLat = coordinates.first.latitude;
+    double maxLat = coordinates.first.latitude;
+    double minLon = coordinates.first.longitude;
+    double maxLon = coordinates.first.longitude;
+
+    for (final c in coordinates) {
+      if (c.latitude < minLat) minLat = c.latitude;
+      if (c.latitude > maxLat) maxLat = c.latitude;
+      if (c.longitude < minLon) minLon = c.longitude;
+      if (c.longitude > maxLon) maxLon = c.longitude;
+    }
+
+    if (minLat == maxLat && minLon == maxLon) {
+      _mapController?.animateCamera(
+        ml.CameraUpdate.newLatLngZoom(
+          ml.LatLng(minLat, minLon),
+          math.max(_zoom, 16),
+        ),
+      );
       return;
     }
-    _mapController.fitCamera(
-      CameraFit.bounds(bounds: bounds, padding: const EdgeInsets.all(48)),
+
+    _mapController?.animateCamera(
+      ml.CameraUpdate.newLatLngBounds(
+        ml.LatLngBounds(
+          southwest: ml.LatLng(minLat, minLon),
+          northeast: ml.LatLng(maxLat, maxLon),
+        ),
+        left: 48,
+        top: 48,
+        right: 48,
+        bottom: 48,
+      ),
     );
   }
 
@@ -596,20 +691,19 @@ class _MapHomePageState extends State<MapHomePage> {
         _gpsActive = true;
         _gpsStatus = 'Mencari sinyal';
       });
-      _positionSubscription ??=
-          Geolocator.getPositionStream(
-            locationSettings: const LocationSettings(
-              accuracy: LocationAccuracy.bestForNavigation,
-              distanceFilter: 3,
-            ),
-          ).listen(
-            _updateGpsPosition,
-            onError: (Object error) {
-              if (!mounted) return;
-              setState(() => _gpsStatus = 'GPS bermasalah');
-              _showGpsMessage('Gagal menerima pembaruan lokasi: $error');
-            },
-          );
+      _positionSubscription ??= Geolocator.getPositionStream(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.bestForNavigation,
+          distanceFilter: 3,
+        ),
+      ).listen(
+        _updateGpsPosition,
+        onError: (Object error) {
+          if (!mounted) return;
+          setState(() => _gpsStatus = 'GPS bermasalah');
+          _showGpsMessage('Gagal menerima pembaruan lokasi: $error');
+        },
+      );
 
       final position = await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
@@ -656,9 +750,11 @@ class _MapHomePageState extends State<MapHomePage> {
   }
 
   void _moveMapToGpsPosition(Position position) {
-    final target = LatLng(position.latitude, position.longitude);
+    final target = ml.LatLng(position.latitude, position.longitude);
     final targetZoom = math.max(_zoom, 15.0);
-    _mapController.move(target, targetZoom);
+    _mapController?.animateCamera(
+      ml.CameraUpdate.newLatLngZoom(target, targetZoom),
+    );
   }
 
   String _gpsQuality(double accuracy) {
