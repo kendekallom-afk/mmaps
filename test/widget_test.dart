@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mmaps_flutter/screens/map_home_page.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:mmaps_flutter/widgets/tools_popup.dart';
 
 void main() {
   // Inisialisasi database untuk lingkungan tes
@@ -29,7 +30,12 @@ void main() {
     };
 
     await tester.pumpWidget(
-      const MaterialApp(home: MapHomePage(loadSavedLibrary: false)),
+      const MaterialApp(
+        home: MapHomePage(
+          loadSavedLibrary: false,
+          useMapLibre: false,
+        ),
+      ),
     );
 
     // 1. Verifikasi Toolbar ada
@@ -71,8 +77,15 @@ void main() {
     expect(find.text('Find By Coordinates'), findsOneWidget);
 
     // Tutup menu alat menggunakan tombol tutup yang tersedia
-    await tester.tap(find.byIcon(Icons.close));
+    final closeButton = find.descendant(
+      of: find.byType(ToolsPopup),
+      matching: find.byType(IconButton),
+    );
+
+    expect(closeButton, findsOneWidget);
+    await tester.tap(closeButton);
     await tester.pump(const Duration(milliseconds: 500));
+
     expect(find.text('Find By Coordinates'), findsNothing);
 
     // Kembalikan error handler asli

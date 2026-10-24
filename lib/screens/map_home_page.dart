@@ -28,8 +28,13 @@ import '../widgets/waypoint_form_sheet.dart';
 
 class MapHomePage extends StatefulWidget {
   final bool loadSavedLibrary;
+  final bool useMapLibre;
 
-  const MapHomePage({super.key, this.loadSavedLibrary = true});
+  const MapHomePage({
+    super.key,
+    this.loadSavedLibrary = true,
+    this.useMapLibre = true,
+  });
 
   @override
   State<MapHomePage> createState() => _MapHomePageState();
@@ -472,43 +477,57 @@ class _MapHomePageState extends State<MapHomePage> {
           : Stack(
               children: [
                 // 1) Peta MapLibre GL
-                ml.MapLibreMap(
-                  styleString: '''{
-                   "version": 8,
-                     "sources": {
-                       "google_sat": {
+                if (widget.useMapLibre)
+                  ml.MapLibreMap(
+                    styleString: '''{
+                      "version": 8,
+                      "sources": {
+                        "google_sat": {
                           "type": "raster",
-                             "tiles": ["https://mt3.google.com/vt/lyrs=s&hl=en&x={x}&y={y}&z={z}"],
-                           "tileSize": 256
-                          }
-                     },
+                          "tiles": [
+                            "https://mt3.google.com/vt/lyrs=s&hl=en&x={x}&y={y}&z={z}"
+                          ],
+                          "tileSize": 256
+                        }
+                      },
                       "layers": [
-                          {
-                             "id": "google_sat_layer",
-                             "type": "raster",
-                             "source": "google_sat"
-                          }
+                        {
+                          "id": "google_sat_layer",
+                          "type": "raster",
+                          "source": "google_sat"
+                        }
                       ]
-                  }''',
-                  initialCameraPosition: ml.CameraPosition(
-                    target: ml.LatLng(_center.latitude, _center.longitude),
-                    zoom: _zoom,
+                    }''',
+                    initialCameraPosition: ml.CameraPosition(
+                      target: ml.LatLng(
+                        _center.latitude,
+                        _center.longitude,
+                      ),
+                      zoom: _zoom,
+                    ),
+                    trackCameraPosition: true,
+                    myLocationEnabled: false,
+                    myLocationTrackingMode:
+                        ml.MyLocationTrackingMode.none,
+                    myLocationRenderMode:
+                        ml.MyLocationRenderMode.normal,
+                    onMapCreated: _onMapCreated,
+                    onStyleLoadedCallback: _onStyleLoaded,
+                    onCameraIdle: _onCameraIdle,
+
+                    // Aktifkan klik peta ketika marker ditekan.
+                    featureTapsTriggersMapClick: true,
+
+                    onMapClick: (point, coordinates) {
+                      unawaited(_handleWaypointMapClick(point));
+                    },
+                  )
+                else
+                  const ColoredBox(
+                    key: ValueKey('map-test-placeholder'),
+                    color: Colors.black12,
+                    child: SizedBox.expand(),
                   ),
-                  trackCameraPosition: true,
-                  myLocationEnabled: false,
-                  myLocationTrackingMode: ml.MyLocationTrackingMode.none,
-                  myLocationRenderMode: ml.MyLocationRenderMode.normal,
-                  onMapCreated: _onMapCreated,
-                  onStyleLoadedCallback: _onStyleLoaded,
-                  onCameraIdle: _onCameraIdle,
-
-                  // PERBAIKAN 1: Aktifkan agar onMapClick terpicu saat klik marker
-                  featureTapsTriggersMapClick: true,
-
-                  onMapClick: (point, coordinates) {
-                    unawaited(_handleWaypointMapClick(point));
-                  },
-                ),
 
                 // 2) Crosshair di tengah
                 const IgnorePointer(child: Center(child: Crosshair())),
@@ -631,7 +650,7 @@ class _MapHomePageState extends State<MapHomePage> {
 
                 if (_showToolsPopup)
                   Positioned(
-                    top: 8,
+                    top: MediaQuery.of(context).padding.top + kToolbarHeight + 8,
                     right: 8,
                     child: ToolsPopup(
                       onClose: () => setState(() => _showToolsPopup = false),
