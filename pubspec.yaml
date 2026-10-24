@@ -68,6 +68,7 @@ flutter:
   uses-material-design: true
   assets:
     - assets/images/location_puck.png
+    - assets/google_satellite_style.json
 
   # To add assets to your application, add an assets section, like this:
   # assets:

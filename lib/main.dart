@@ -1,10 +1,15 @@
 import 'package:flutter/material.dart';
+import 'package:maplibre_gl/maplibre_gl.dart'; // <-- Tambahkan import ini
 
 import 'screens/map_home_page.dart';
 
 export 'screens/map_home_page.dart';
 
 void main() {
+  // Tambahkan dua baris ini sebelum runApp
+  WidgetsFlutterBinding.ensureInitialized();
+  MapLibreMap.preWarm(); 
+
   runApp(const MyApp());
 }
 

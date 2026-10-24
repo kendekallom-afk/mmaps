@@ -118,17 +118,17 @@ class _MapHomePageState extends State<MapHomePage> {
   }
 
   /// Dipanggil otomatis setelah style JSON selesai dimuat oleh engine MapLibre
-   void _onStyleLoaded() async {
+     void _onStyleLoaded() async {
     _isStyleLoaded = true;
     _layersInitialized = false;
 
-    // 1. Sinkronisasi layer KML TERLEBIH DAHULU
+    // 1. Sinkronisasi layer KML
     await _syncMapLayers();
 
-    // 2. Paksa update data puck (posisi & heading)
+    // 2. Update posisi puck
     _updateUserPuck();
 
-    // 3. BARU tambahkan gambar puck ke style MapLibre
+    // 3. Tambahkan gambar puck
     try {
       final ByteData data = await rootBundle.load('assets/images/location_puck.png');
       final Uint8List bytes = data.buffer.asUint8List();
@@ -137,7 +137,7 @@ class _MapHomePageState extends State<MapHomePage> {
       debugPrint('Image puck-icon gagal dimuat atau sudah ada: $e');
     }
 
-    // 4. BARU tambahkan source GeoJSON dan SymbolLayer untuk puck
+    // 4. Tambahkan source dan layer puck
     try {
       await _mapController!.addGeoJsonSource(_puckSourceId, {
         "type": "FeatureCollection",
@@ -163,8 +163,22 @@ class _MapHomePageState extends State<MapHomePage> {
     if (!_showLayersView && activeMaps.isNotEmpty) {
       _fitMapToImportedMaps(activeMaps);
     }
-  }
+  } // <--- INI ADALAH KURUNG KURAWAL PENUTUP _onStyleLoaded
 
+  // ==========================================
+  // METHOD BARU DITARUH DI SINI (SETELAH PENUTUP)
+  // ==========================================
+  
+  void _zoomToLayerByName(String layerName) {
+    for (final map in _importedMaps) {
+      if (map.isActive && map.name == layerName) {
+        _fitMapToImportedMap(map);
+        return; 
+      }
+    }
+  }
+  
+  
   /// Menambahkan atau memperbarui GeoJSON sources & style layers di MapLibre
   Future<void> _syncMapLayers() async {
     if (!_isStyleLoaded || _mapController == null) return;
@@ -357,7 +371,7 @@ class _MapHomePageState extends State<MapHomePage> {
                   textAlign: TextAlign.center,
                   style: const TextStyle(
                     fontFamily: 'monospace',
-                    fontSize: 10,
+                    fontSize: 13,
                     height: 1.3,
                     color: Colors.white,
                   ),
@@ -421,7 +435,24 @@ class _MapHomePageState extends State<MapHomePage> {
               children: [
                 // 1) Peta MapLibre GL
                 ml.MapLibreMap(
-                  styleString: 'https://tiles.openfreemap.org/styles/positron',
+                  //styleString: 'https://tiles.openfreemap.org/styles/positron',
+                  styleString: '''{
+                   "version": 8,
+                     "sources": {
+                       "google_sat": {
+                          "type": "raster",
+                             "tiles": ["https://mt3.google.com/vt/lyrs=s&hl=en&x={x}&y={y}&z={z}"],
+                           "tileSize": 256
+                          }
+                     },
+                      "layers": [
+                          {
+                             "id": "google_sat_layer",
+                             "type": "raster",
+                             "source": "google_sat"
+                          }
+                      ]
+                  }''', // <-- Gunakan raw string JSON ini
                   initialCameraPosition: ml.CameraPosition(
                     target: ml.LatLng(_center.latitude, _center.longitude),
                     zoom: _zoom,
@@ -460,9 +491,10 @@ class _MapHomePageState extends State<MapHomePage> {
                 // 4) Active layers overlay (kiri atas)
                 Positioned(
                   left: 12,
-                  top: 12,
+                  top: MediaQuery.of(context).padding.top + kToolbarHeight + 8,
                   child: ActiveLayersOverlay(
                     layers: activeMaps.map((map) => map.name).toList(),
+                    onLayerTap: _zoomToLayerByName, // <-- Tambahkan baris ini
                   ),
                 ),
 
