@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'; // Ditambahkan untuk rootBundle
 import 'package:flutter_compass/flutter_compass.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
@@ -30,9 +31,6 @@ class MapHomePage extends StatefulWidget {
   State<MapHomePage> createState() => _MapHomePageState();
 }
 
-static const String _puckSourceId = 'user-puck-source';
-static const String _puckLayerId = 'user-puck-layer';
-
 class _MapHomePageState extends State<MapHomePage> {
   // Controller MapLibre & status pemuatan
   ml.MapLibreMapController? _mapController;
@@ -43,7 +41,7 @@ class _MapHomePageState extends State<MapHomePage> {
   StreamSubscription<Position>? _positionSubscription;
   StreamSubscription<CompassEvent>? _compassSubscription;
 
-  // Konstanta ID Source dan Layer
+  // Konstanta ID Source dan Layer KML
   static const String _polySourceId = 'kml-polygons-source';
   static const String _polyFillLayerId = 'kml-polygons-fill';
   static const String _polyOutlineLayerId = 'kml-polygons-outline';
@@ -53,6 +51,10 @@ class _MapHomePageState extends State<MapHomePage> {
 
   static const String _pointSourceId = 'kml-points-source';
   static const String _pointCircleLayerId = 'kml-points-circle';
+
+  // Konstanta ID Source dan Layer Puck (Lokasi Pengguna)
+  static const String _puckSourceId = 'user-puck-source';
+  static const String _puckLayerId = 'user-puck-layer';
 
   // State peta
   LatLng _center = const LatLng(-2.67, 118.89);
@@ -89,7 +91,7 @@ class _MapHomePageState extends State<MapHomePage> {
         (event) {
           if (!mounted) return;
           setState(() => _compassHeading = event.heading);
-           _updateUserPuck();
+          _updateUserPuck();
         },
         onError: (Object error) {
           if (!mounted) return;
@@ -106,27 +108,7 @@ class _MapHomePageState extends State<MapHomePage> {
     _mapController?.dispose();
     super.dispose();
   }
-void _updateUserPuck() {
-  if (_mapController == null || !_isStyleLoaded || _gpsPosition == null) return;
 
-  final lat = _gpsPosition!.latitude;
-  final lon = _gpsPosition!.longitude;
-  final heading = _compassHeading ?? 0.0; // Default ke utara jika kompas null
-
-  _mapController!.setGeoJsonSource(_puckSourceId, {
-    "type": "FeatureCollection",
-    "features": [{
-      "type": "Feature",
-      "geometry": {
-        "type": "Point",
-        "coordinates": [lon, lat] // Perhatikan urutan: lon, lat
-      },
-      "properties": {
-        "heading": heading // Properti ini yang dibaca oleh iconRotate
-      }
-    }]
-  });
-}
   // ==========================================
   // SIKLUS HIDUP MAPLIBRE SOURCES & STYLE LAYERS
   // ==========================================
@@ -135,36 +117,48 @@ void _updateUserPuck() {
     _mapController = controller;
   }
 
-  /// Dipanggil otomatis setelah style JSON (misal demotiles) selesai dimuat oleh engine MapLibre
-  void _onStyleLoaded() async {
+  /// Dipanggil otomatis setelah style JSON selesai dimuat oleh engine MapLibre
+   void _onStyleLoaded() async {
     _isStyleLoaded = true;
-    _layersInitialized = false; // Reset status saat style di-reload
-    // Tambahkan gambar puck ke style MapLibre
-await _mapController!.addImage(
-  'puck-icon', 
-  await rootBundle.load('assets/images/location_puck.png'),
-);
+    _layersInitialized = false;
 
-// Tambahkan source GeoJSON kosong untuk puck
-await _mapController!.addGeoJsonSource(_puckSourceId, {
-  "type": "FeatureCollection",
-  "features": []
-});
-
-// Tambahkan SymbolLayer untuk puck
-await _mapController!.addSymbolLayer(
-  _puckSourceId,
-  _puckLayerId,
-  const ml.SymbolLayerProperties(
-    iconImage: 'puck-icon',
-    iconSize: 0.5, // Sesuaikan ukuran
-    iconRotate: ['get', 'heading'], // Rotasi diambil dari properti GeoJSON
-    iconAllowOverlap: true,
-    iconIgnorePlacement: true,
-  ),
-);
+    // 1. Sinkronisasi layer KML TERLEBIH DAHULU
     await _syncMapLayers();
 
+    // 2. Paksa update data puck (posisi & heading)
+    _updateUserPuck();
+
+    // 3. BARU tambahkan gambar puck ke style MapLibre
+    try {
+      final ByteData data = await rootBundle.load('assets/images/location_puck.png');
+      final Uint8List bytes = data.buffer.asUint8List();
+      await _mapController!.addImage('puck-icon', bytes);
+    } catch (e) {
+      debugPrint('Image puck-icon gagal dimuat atau sudah ada: $e');
+    }
+
+    // 4. BARU tambahkan source GeoJSON dan SymbolLayer untuk puck
+    try {
+      await _mapController!.addGeoJsonSource(_puckSourceId, {
+        "type": "FeatureCollection",
+        "features": []
+      });
+      await _mapController!.addSymbolLayer(
+        _puckSourceId,
+        _puckLayerId,
+        const ml.SymbolLayerProperties(
+          iconImage: 'puck-icon',
+          iconSize: 0.5,
+          iconRotate: ['get', 'heading'],
+          iconAllowOverlap: true,
+          iconIgnorePlacement: true,
+        ),
+      );
+    } catch (e) {
+      debugPrint('Gagal menambahkan layer puck: $e');
+    }
+
+    // 5. Fit kamera ke peta yang aktif
     final activeMaps = _importedMaps.where((map) => map.isActive);
     if (!_showLayersView && activeMaps.isNotEmpty) {
       _fitMapToImportedMaps(activeMaps);
@@ -194,7 +188,7 @@ await _mapController!.addSymbolLayer(
           geoJsonData.points,
         );
 
-        // 2. Tambahkan Fill Layer untuk interior poligon (Data-Driven Styling)
+        // 2. Tambahkan Fill Layer untuk interior poligon
         await _mapController!.addFillLayer(
           _polySourceId,
           _polyFillLayerId,
@@ -204,7 +198,7 @@ await _mapController!.addSymbolLayer(
           ),
         );
 
-        // 2b. Tambahkan Line Layer untuk garis batas poligon
+        // 3. Tambahkan Line Layer untuk garis batas poligon
         await _mapController!.addLineLayer(
           _polySourceId,
           _polyOutlineLayerId,
@@ -214,7 +208,7 @@ await _mapController!.addSymbolLayer(
           ),
         );
 
-        // 3. Tambahkan Line Layer untuk polyline
+        // 4. Tambahkan Line Layer untuk polyline
         await _mapController!.addLineLayer(
           _lineSourceId,
           _lineLayerId,
@@ -227,7 +221,7 @@ await _mapController!.addSymbolLayer(
           ),
         );
 
-        // 4. Tambahkan Circle Layer untuk titik (Marker)
+        // 5. Tambahkan Circle Layer untuk titik (Marker)
         await _mapController!.addCircleLayer(
           _pointSourceId,
           _pointCircleLayerId,
@@ -262,6 +256,46 @@ await _mapController!.addSymbolLayer(
   }
 
   // ==========================================
+  // PEMBARUAN LOKASI & PUCK
+  // ==========================================
+
+  void _updateGpsPosition(Position position) {
+    if (!mounted) return;
+    setState(() {
+      _gpsPosition = position;
+      _gpsActive = true;
+      _gpsStatus = _gpsQuality(position.accuracy);
+    });
+    _updateUserPuck();
+  }
+
+  void _updateUserPuck() {
+    if (_mapController == null || !_isStyleLoaded || _gpsPosition == null) return;
+
+    final lat = _gpsPosition!.latitude;
+    final lon = _gpsPosition!.longitude;
+    final heading = _compassHeading ?? 0.0;
+
+    try {
+      _mapController!.setGeoJsonSource(_puckSourceId, {
+        "type": "FeatureCollection",
+        "features": [{
+          "type": "Feature",
+          "geometry": {
+            "type": "Point",
+            "coordinates": [lon, lat] // Urutan GeoJSON: lon, lat
+          },
+          "properties": {
+            "heading": heading
+          }
+        }]
+      });
+    } catch (e) {
+      debugPrint('Gagal memperbarui puck: $e');
+    }
+  }
+
+  // ==========================================
   // PELACAKAN KAMERA (IDLE LISTENER)
   // ==========================================
 
@@ -272,7 +306,6 @@ await _mapController!.addSymbolLayer(
     final newCenter = LatLng(camera.target.latitude, camera.target.longitude);
     final newZoom = camera.zoom;
 
-    // Hanya pemicu setState saat kamera berhenti bergerak (bebas frame drop)
     if (_center.latitude != newCenter.latitude ||
         _center.longitude != newCenter.longitude ||
         _zoom != newZoom) {
@@ -394,7 +427,7 @@ await _mapController!.addSymbolLayer(
                     zoom: _zoom,
                   ),
                   trackCameraPosition: true,
-                  myLocationEnabled: _gpsActive,
+                  myLocationEnabled: false,
                   myLocationTrackingMode: ml.MyLocationTrackingMode.none,
                   myLocationRenderMode: ml.MyLocationRenderMode.normal,
                   onMapCreated: _onMapCreated,
@@ -494,7 +527,6 @@ await _mapController!.addSymbolLayer(
 
   Future<void> _loadMapLibrary() async {
     try {
-      // 1. Ambil daftar file cepat (hanya id, name, size tanpa bytes)
       final storedFiles = await MapFileStore.listStoredMapFiles();
       final activeIds = await MapFileStore.loadActiveIds();
       final maps = <ImportedMap>[];
@@ -503,7 +535,6 @@ await _mapController!.addSymbolLayer(
       for (final fileInfo in storedFiles) {
         final isActive = activeIds.contains(fileInfo.id);
         if (isActive) {
-          // Hanya file aktif yang dibaca bytes-nya dan di-parse saat awal
           try {
             final bytes = await MapFileStore.readStoredMapFile(fileInfo.id);
             final map = _kmlImportService.parse(
@@ -517,7 +548,6 @@ await _mapController!.addSymbolLayer(
             failedFiles.add(fileInfo.name);
           }
         } else {
-          // File tidak aktif: buat placeholder instan tanpa membaca bytes ke RAM
           maps.add(
             ImportedMap(
               id: fileInfo.id,
@@ -610,7 +640,6 @@ await _mapController!.addSymbolLayer(
     ImportedMap targetMap = map;
 
     if (activate) {
-      // Lazy parsing: jika peta belum pernah di-parse, baca bytes dan parse sekarang!
       final isLazyPlaceholder = map.points.isEmpty &&
           map.lines.isEmpty &&
           map.polygons.isEmpty &&
@@ -844,37 +873,6 @@ await _mapController!.addSymbolLayer(
       if (mounted) setState(() => _gpsBusy = false);
     }
   }
-
-  void _updateGpsPosition(Position position) {
-  if (!mounted) return;
-  setState(() {
-    _gpsPosition = position;
-    _gpsActive = true;
-    _gpsStatus = _gpsQuality(position.accuracy);
-  });
-  _updateUserPuck();
-}
-void _updateUserPuck() {
-  if (_mapController == null || !_isStyleLoaded || _gpsPosition == null) return;
-
-  final lat = _gpsPosition!.latitude;
-  final lon = _gpsPosition!.longitude;
-  final heading = _compassHeading ?? 0.0;
-
-  _mapController!.setGeoJsonSource(_puckSourceId, {
-    "type": "FeatureCollection",
-    "features": [{
-      "type": "Feature",
-      "geometry": {
-        "type": "Point",
-        "coordinates": [lon, lat]
-      },
-      "properties": {
-        "heading": heading
-      }
-    }]
-  });
-}
 
   void _moveMapToGpsPosition(Position position) {
     final target = ml.LatLng(position.latitude, position.longitude);

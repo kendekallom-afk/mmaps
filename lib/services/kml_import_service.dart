@@ -40,10 +40,23 @@ class KmlImportService {
     final rasterOverlays = <MapRasterOverlay>[];
     var totalOverlayBytes = 0;
 
+    // Ambil semua definisi Style global (di level Document)
+    final styleMap = <String, _KmlStyle>{};
+    for (final style in xml.descendantElements.where(
+      (e) => e.localName == 'Style' && e.getAttribute('id') != null,
+    )) {
+      final id = style.getAttribute('id')!;
+      styleMap[id] = _parseStyleElement(style);
+    }
+
     for (final placemark in xml.descendantElements.where(
       (element) => element.localName == 'Placemark',
     )) {
       final name = _childText(placemark, 'name') ?? 'Placemark';
+
+      // Cari style untuk Placemark ini
+      final style = _resolveStyle(placemark, styleMap);
+
       for (final geometry in placemark.descendantElements.where(
         (element) => const {
           'Point',
@@ -59,7 +72,7 @@ class KmlImportService {
                 MapPointFeature(
                   name: name,
                   point: coordinates.first,
-                  color: Colors.red,
+                  color: style.iconColor ?? Colors.red, // Gunakan warna ikon jika ada
                 ),
               );
             }
@@ -70,7 +83,8 @@ class KmlImportService {
                 MapLineFeature(
                   name: name,
                   points: coordinates,
-                  color: Colors.blue,
+                  color: style.lineColor ?? Colors.blue,
+                  width: style.lineWidth,
                 ),
               );
             }
@@ -85,13 +99,19 @@ class KmlImportService {
                   .map(_coordinates)
                   .where((ring) => ring.length >= 3)
                   .toList();
+              
+              final baseFill = style.polyColor ?? Colors.blue;
+              final fillColor = style.hasPolyColor 
+                  ? baseFill.withValues(alpha: baseFill.a * style.polyFillOpacity) 
+                  : Colors.blue.withValues(alpha: 0.18);
+
               polygonFeatures.add(
                 MapPolygonFeature(
                   name: name,
                   points: outerPoints,
                   holes: holes,
-                  fillColor: Colors.blue.withValues(alpha: 0.18),
-                  borderColor: Colors.blue,
+                  fillColor: fillColor,
+                  borderColor: style.lineColor ?? Colors.blue,
                 ),
               );
             }
@@ -159,6 +179,96 @@ class KmlImportService {
       overlays: rasterOverlays,
     );
   }
+
+  // ==========================================
+  // PARSING STYLE KML
+  // ==========================================
+
+  _KmlStyle _resolveStyle(XmlElement placemark, Map<String, _KmlStyle> styleMap) {
+    // 1. Cek apakah ada <Style> langsung di dalam Placemark
+    final inlineStyle = placemark.childElements.where((e) => e.localName == 'Style').firstOrNull;
+    if (inlineStyle != null) {
+      return _parseStyleElement(inlineStyle);
+    }
+
+    // 2. Cek apakah ada referensi <styleUrl>#id</styleUrl>
+    final styleUrl = _childText(placemark, 'styleUrl');
+    if (styleUrl != null && styleUrl.startsWith('#')) {
+      final id = styleUrl.substring(1);
+      final style = styleMap[id];
+      if (style != null) return style;
+    }
+
+    return _KmlStyle(); // Default kosong jika tidak ada style
+  }
+
+  _KmlStyle _parseStyleElement(XmlElement styleElement) {
+    final result = _KmlStyle();
+
+    // Parsing LineStyle
+    final lineStyle = _firstChild(styleElement, 'LineStyle');
+    if (lineStyle != null) {
+      final colorStr = _childText(lineStyle, 'color');
+      if (colorStr != null) {
+        result.lineColor = _parseKmlColor(colorStr);
+      }
+      final widthStr = _childText(lineStyle, 'width');
+      if (widthStr != null) {
+        result.lineWidth = double.tryParse(widthStr) ?? 3.0;
+      }
+    }
+
+    // Parsing PolyStyle
+    final polyStyle = _firstChild(styleElement, 'PolyStyle');
+    if (polyStyle != null) {
+      final colorStr = _childText(polyStyle, 'color');
+      if (colorStr != null) {
+        result.polyColor = _parseKmlColor(colorStr);
+        result.hasPolyColor = true;
+      }
+      final fillStr = _childText(polyStyle, 'fill');
+      if (fillStr != null && (fillStr == '0' || fillStr == 'false')) {
+        result.polyFillOpacity = 0.0; // Transparan total jika fill="0"
+      }
+    }
+
+    // Parsing IconStyle
+    final iconStyle = _firstChild(styleElement, 'IconStyle');
+    if (iconStyle != null) {
+      final colorStr = _childText(iconStyle, 'color');
+      if (colorStr != null) {
+        result.iconColor = _parseKmlColor(colorStr);
+      }
+    }
+
+    return result;
+  }
+
+  /// Konversi warna KML (aabbggrr) ke Color Flutter
+  Color? _parseKmlColor(String kmlHex) {
+    final hex = kmlHex.trim();
+    if (hex.length != 8) return null; // Harus 8 digit (alpha + RGB)
+    try {
+      final a = int.parse(hex.substring(0, 2), radix: 16);
+      final b = int.parse(hex.substring(2, 4), radix: 16);
+      final g = int.parse(hex.substring(4, 6), radix: 16);
+      final r = int.parse(hex.substring(6, 8), radix: 16);
+      return Color.fromARGB(a, r, g, b); // Urutan KML: AABBGGRR
+    } catch (_) {
+      return null;
+    }
+  }
+
+  XmlElement? _firstChild(XmlElement element, String name) {
+    for (final child in element.childElements) {
+      if (child.localName == name) return child;
+    }
+    return null;
+  }
+
+  // ==========================================
+  // PARSING FILE & GEOMETRI
+  // ==========================================
 
   _KmlSource _readKmz(Uint8List bytes) {
     final archive = ZipDecoder().decodeBytes(bytes);
@@ -275,6 +385,16 @@ class KmlImportService {
     }
     return parts.join('/');
   }
+}
+
+// Class penampung untuk hasil parsing Style KML
+class _KmlStyle {
+  Color? lineColor;
+  Color? polyColor;
+  Color? iconColor;
+  double lineWidth = 3.0;
+  bool hasPolyColor = false;
+  double polyFillOpacity = 1.0; // Default opacity 100%
 }
 
 class _KmlSource {
