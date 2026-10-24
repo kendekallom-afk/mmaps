@@ -845,51 +845,65 @@ class _MapHomePageState extends State<MapHomePage> {
     );
     if (result == null || !mounted) return;
 
-    try {
-      if (result case WaypointSaved(:final waypoint)) {
+       try {
+      if (result is WaypointSaved) {
+        final waypoint = result.waypoint;
+
         if (initialWaypoint == null) {
+          // --- MODE TAMBAH BARU ---
           await DatabaseHelper.instance.insertWaypoint(waypoint);
           if (!mounted) return;
-          setState(() => _waypoints = [..._waypoints, waypoint]);
+          
+          setState(() {
+            _waypoints = [..._waypoints, waypoint];
+          });
           _showMapMessage('"${waypoint.name}" berhasil disimpan.');
         } else {
+          // --- MODE EDIT / PERBARUI ---
+          // 1. Simpan ke database
           await DatabaseHelper.instance.updateWaypoint(waypoint);
           if (!mounted) return;
+          
+          // 2. Perbarui state list _waypoints agar foto baru ikut tersimpan di memori
           setState(() {
-            _waypoints = _waypoints
-                .map(
-                  (current) => current.id == waypoint.id ? waypoint : current,
-                )
-                .toList();
+            _waypoints = _waypoints.map((current) {
+              if (current.id == waypoint.id) {
+                return waypoint; // Ganti dengan objek waypoint yang baru (berisi foto terbaru)
+              }
+              return current;
+            }).toList();
           });
           _showMapMessage('"${waypoint.name}" berhasil diperbarui.');
         }
-      } else if (result case WaypointDeleted(:final waypointId)) {
+      } else if (result is WaypointDeleted) {
+        final waypointId = result.waypointId;
+        
+        // --- MODE HAPUS ---
         await DatabaseHelper.instance.deleteWaypoint(waypointId);
-        String? photoCleanupError;
-        final photoPath = initialWaypoint?.photoPath;
-        if (photoPath != null) {
+        
+        // Hapus file foto fisik dari memori HP
+        final photoPaths = initialWaypoint?.photoPaths ?? []; 
+        for (final path in photoPaths) {
           try {
-            final photoFile = File(photoPath);
+            final photoFile = File(path);
             if (await photoFile.exists()) await photoFile.delete();
-          } catch (error) {
-            photoCleanupError = '$error';
+          } catch (e) {
+            debugPrint('Gagal menghapus file foto: $e');
           }
         }
+        
         if (!mounted) return;
         setState(() {
           _waypoints = _waypoints
               .where((waypoint) => waypoint.id != waypointId)
               .toList();
         });
-        _showMapMessage(
-          photoCleanupError == null
-              ? 'Waypoint berhasil dihapus.'
-              : 'Waypoint dihapus, tetapi foto gagal dihapus: '
-                    '$photoCleanupError',
-        );
+        _showMapMessage('Waypoint berhasil dihapus.');
       }
+      
+      // 3. Selalu perbarui peta setelah ada perubahan (tambah/edit/hapus)
       await _updateWaypointsOnMap();
+      
     } catch (error) {
       if (mounted) {
         _showMapMessage('Gagal menyimpan perubahan waypoint: $error');

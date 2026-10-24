@@ -6,7 +6,8 @@ import '../models/waypoint.dart';
 /// Helper Singleton untuk mengelola database SQLite `mmaps.db`.
 class DatabaseHelper {
   static const String _dbName = 'mmaps.db';
-  static const int _dbVersion = 1;
+  // 1. NAIKKAN VERSI DATABASE MENJADI 2
+  static const int _dbVersion = 2; 
   static const String _tableWaypoints = 'waypoints';
 
   // Singleton instance
@@ -42,23 +43,30 @@ class DatabaseHelper {
         description TEXT NOT NULL,
         latitude    REAL NOT NULL,
         longitude   REAL NOT NULL,
-        photoPath   TEXT,
+        photoPaths  TEXT,
         createdAt   TEXT NOT NULL
       )
     ''');
   }
 
-  /// Placeholder untuk migrasi skema di versi mendatang.
+  /// Logika migrasi saat versi database dinaikkan.
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
-    // Tambahkan migrasi di sini jika _dbVersion dinaikkan.
+    if (oldVersion < 2) {
+      // Karena data lama mungkin tidak terlalu penting di tahap pengembangan,
+      // cara paling mudah adalah menghapus tabel lama dan membuat yang baru.
+      await db.execute('DROP TABLE IF EXISTS $_tableWaypoints');
+      await _onCreate(db, newVersion);
+      
+      // Catatan: Jika Anda ingin mempertahankan data lama (hanya menambah kolom),
+      // gunakan kode ini sebagai gantinya:
+      // await db.execute('ALTER TABLE $_tableWaypoints ADD COLUMN photoPaths TEXT');
+    }
   }
 
   // ---------------------------------------------------------------------------
   // CRUD Operations
   // ---------------------------------------------------------------------------
 
-  /// Menyimpan [waypoint] baru ke database.
-  /// Mengembalikan jumlah baris yang berhasil dimasukkan (biasanya 1).
   Future<int> insertWaypoint(Waypoint waypoint) async {
     final db = await database;
     return db.insert(
@@ -68,7 +76,6 @@ class DatabaseHelper {
     );
   }
 
-  /// Mengambil semua waypoint, diurutkan dari yang terbaru.
   Future<List<Waypoint>> getAllWaypoints() async {
     final db = await database;
     final maps = await db.query(
@@ -78,8 +85,6 @@ class DatabaseHelper {
     return maps.map(Waypoint.fromMap).toList();
   }
 
-  /// Mengambil satu waypoint berdasarkan [id]-nya.
-  /// Mengembalikan `null` jika tidak ditemukan.
   Future<Waypoint?> getWaypointById(String id) async {
     final db = await database;
     final maps = await db.query(
@@ -92,8 +97,6 @@ class DatabaseHelper {
     return Waypoint.fromMap(maps.first);
   }
 
-  /// Memperbarui data [waypoint] yang sudah ada.
-  /// Mengembalikan jumlah baris yang terpengaruh.
   Future<int> updateWaypoint(Waypoint waypoint) async {
     final db = await database;
     return db.update(
@@ -104,8 +107,6 @@ class DatabaseHelper {
     );
   }
 
-  /// Menghapus waypoint berdasarkan [id]-nya.
-  /// Mengembalikan jumlah baris yang terhapus.
   Future<int> deleteWaypoint(String id) async {
     final db = await database;
     return db.delete(
@@ -115,7 +116,6 @@ class DatabaseHelper {
     );
   }
 
-  /// Menutup koneksi database. Umumnya tidak perlu dipanggil manual.
   Future<void> close() async {
     final db = _database;
     if (db != null) {

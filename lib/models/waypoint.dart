@@ -1,4 +1,4 @@
-import 'package:uuid/uuid.dart';
+import 'dart:convert';
 
 class Waypoint {
   final String id;
@@ -6,21 +6,19 @@ class Waypoint {
   final String description;
   final double latitude;
   final double longitude;
-  final String? photoPath;
+  final List<String> photoPaths; // Ubah dari String? menjadi List<String>
   final DateTime createdAt;
 
   Waypoint({
-    String? id,
+    required this.id,
     required this.name,
     required this.description,
     required this.latitude,
     required this.longitude,
-    this.photoPath,
-    DateTime? createdAt,
-  })  : id = id ?? const Uuid().v4(),
-        createdAt = createdAt ?? DateTime.now();
+    this.photoPaths = const [], // Default list kosong
+    required this.createdAt,
+  });
 
-  /// Konversi ke Map untuk disimpan ke SQLite.
   Map<String, dynamic> toMap() {
     return {
       'id': id,
@@ -28,45 +26,51 @@ class Waypoint {
       'description': description,
       'latitude': latitude,
       'longitude': longitude,
-      'photoPath': photoPath,
+      // Simpan list sebagai JSON string
+      'photoPaths': jsonEncode(photoPaths), 
       'createdAt': createdAt.toIso8601String(),
     };
   }
 
-  /// Buat Waypoint dari Map yang dibaca dari SQLite.
   factory Waypoint.fromMap(Map<String, dynamic> map) {
+    // Baca JSON string menjadi List<String>
+    List<String> paths = [];
+    if (map['photoPaths'] != null && map['photoPaths'].isNotEmpty) {
+      try {
+        final decoded = jsonDecode(map['photoPaths']);
+        if (decoded is List) {
+          paths = decoded.map((e) => e.toString()).toList();
+        }
+      } catch (e) {
+        // Abaikan jika format lama (bukan JSON)
+        paths = [map['photoPaths'].toString()];
+      }
+    }
+
     return Waypoint(
-      id: map['id'] as String,
-      name: map['name'] as String,
-      description: map['description'] as String,
-      latitude: map['latitude'] as double,
-      longitude: map['longitude'] as double,
-      photoPath: map['photoPath'] as String?,
-      createdAt: DateTime.parse(map['createdAt'] as String),
+      id: map['id'],
+      name: map['name'],
+      description: map['description'] ?? '',
+      latitude: map['latitude'],
+      longitude: map['longitude'],
+      photoPaths: paths,
+      createdAt: DateTime.parse(map['createdAt']),
     );
   }
 
-  /// Salin Waypoint dengan field yang diubah.
   Waypoint copyWith({
     String? name,
     String? description,
-    double? latitude,
-    double? longitude,
-    String? photoPath,
+    List<String>? photoPaths,
   }) {
     return Waypoint(
       id: id,
       name: name ?? this.name,
       description: description ?? this.description,
-      latitude: latitude ?? this.latitude,
-      longitude: longitude ?? this.longitude,
-      photoPath: photoPath ?? this.photoPath,
+      latitude: latitude,
+      longitude: longitude,
+      photoPaths: photoPaths ?? this.photoPaths,
       createdAt: createdAt,
     );
-  }
-
-  @override
-  String toString() {
-    return 'Waypoint(id: $id, name: $name, lat: $latitude, lon: $longitude)';
   }
 }
