@@ -11,6 +11,8 @@ import 'package:latlong2/latlong.dart';
 import 'package:maplibre_gl/maplibre_gl.dart' as ml;
 
 import '../models/imported_map.dart';
+import '../models/waypoint.dart';
+import '../services/database_helper.dart';
 import '../services/kml_import_service.dart';
 import '../services/map_file_store.dart';
 import '../utils/geojson_helper.dart';
@@ -21,6 +23,7 @@ import '../widgets/gps_overlay.dart';
 import '../widgets/map_attribution.dart';
 import '../widgets/opacity_control.dart';
 import '../widgets/tools_popup.dart';
+import '../widgets/waypoint_form_sheet.dart';
 
 class MapHomePage extends StatefulWidget {
   final bool loadSavedLibrary;
@@ -52,6 +55,11 @@ class _MapHomePageState extends State<MapHomePage> {
   static const String _pointSourceId = 'kml-points-source';
   static const String _pointCircleLayerId = 'kml-points-circle';
 
+  // Konstanta ID Source dan Layer Waypoint
+  static const String _waypointSourceId = 'waypoints-source';
+  static const String _waypointCircleLayerId = 'waypoints-circle-layer';
+  static const String _waypointLabelLayerId = 'waypoints-label-layer';
+
   // Konstanta ID Source dan Layer Puck (Lokasi Pengguna)
   static const String _puckSourceId = 'user-puck-source';
   static const String _puckLayerId = 'user-puck-layer';
@@ -68,10 +76,14 @@ class _MapHomePageState extends State<MapHomePage> {
   bool _loadingMaps = true;
   bool _importingMap = false;
 
+  // State waypoints
+  List<Waypoint> _waypoints = [];
+  Waypoint? _selectedWaypoint;
+  Offset? _tooltipPosition;
+
   // State mode
   bool _showToolsPopup = false;
   bool _showOpacityPanel = false;
-  bool _addingWaypoint = false;
   bool _showLayersView = false;
   int _selectedLibraryTab = 0;
   double _opacity = 100;
@@ -84,6 +96,8 @@ class _MapHomePageState extends State<MapHomePage> {
     } else {
       _loadingMaps = false;
     }
+    // Muat waypoints dari database saat app dibuka
+    unawaited(_loadWaypoints());
     if (!kIsWeb &&
         (defaultTargetPlatform == TargetPlatform.android ||
             defaultTargetPlatform == TargetPlatform.iOS)) {
@@ -118,7 +132,7 @@ class _MapHomePageState extends State<MapHomePage> {
   }
 
   /// Dipanggil otomatis setelah style JSON selesai dimuat oleh engine MapLibre
-     void _onStyleLoaded() async {
+  void _onStyleLoaded() async {
     _isStyleLoaded = true;
     _layersInitialized = false;
 
@@ -130,7 +144,9 @@ class _MapHomePageState extends State<MapHomePage> {
 
     // 3. Tambahkan gambar puck
     try {
-      final ByteData data = await rootBundle.load('assets/images/location_puck.png');
+      final ByteData data = await rootBundle.load(
+        'assets/images/location_puck.png',
+      );
       final Uint8List bytes = data.buffer.asUint8List();
       await _mapController!.addImage('puck-icon', bytes);
     } catch (e) {
@@ -141,7 +157,7 @@ class _MapHomePageState extends State<MapHomePage> {
     try {
       await _mapController!.addGeoJsonSource(_puckSourceId, {
         "type": "FeatureCollection",
-        "features": []
+        "features": [],
       });
       await _mapController!.addSymbolLayer(
         _puckSourceId,
@@ -158,7 +174,50 @@ class _MapHomePageState extends State<MapHomePage> {
       debugPrint('Gagal menambahkan layer puck: $e');
     }
 
-    // 5. Fit kamera ke peta yang aktif
+    // 5. Tambahkan source dan layer untuk waypoints
+    try {
+      await _mapController!.addGeoJsonSource(
+        _waypointSourceId,
+        _buildWaypointsGeoJson([]),
+      );
+      // Circle merah bertepi putih sebagai marker waypoint
+      await _mapController!.addCircleLayer(
+        _waypointSourceId,
+        _waypointCircleLayerId,
+        const ml.CircleLayerProperties(
+          circleColor: '#FF4444',
+          circleRadius: 8,
+          circleOpacity: 0.9,
+          circleStrokeColor: '#FFFFFF',
+          circleStrokeWidth: 2.0,
+        ),
+      );
+      // Label nama waypoint di bawah circle
+      await _mapController!.addSymbolLayer(
+        _waypointSourceId,
+        _waypointLabelLayerId,
+        const ml.SymbolLayerProperties(
+          textField: ['get', 'name'],
+          textSize: 11,
+          textColor: '#FFFFFF',
+          textHaloColor: '#000000',
+          textHaloWidth: 1.5,
+          textOffset: [0, 1.6],
+          textAnchor: 'top',
+          textAllowOverlap: false,
+          textIgnorePlacement: false,
+        ),
+      );
+    } catch (e) {
+      debugPrint('Gagal menambahkan layer waypoints: $e');
+    }
+
+    // 6. Render waypoints yang sudah ada ke peta
+    if (_waypoints.isNotEmpty) {
+      await _updateWaypointsOnMap();
+    }
+
+    // 7. Fit kamera ke peta yang aktif
     final activeMaps = _importedMaps.where((map) => map.isActive);
     if (!_showLayersView && activeMaps.isNotEmpty) {
       _fitMapToImportedMaps(activeMaps);
@@ -168,17 +227,16 @@ class _MapHomePageState extends State<MapHomePage> {
   // ==========================================
   // METHOD BARU DITARUH DI SINI (SETELAH PENUTUP)
   // ==========================================
-  
+
   void _zoomToLayerByName(String layerName) {
     for (final map in _importedMaps) {
       if (map.isActive && map.name == layerName) {
         _fitMapToImportedMap(map);
-        return; 
+        return;
       }
     }
   }
-  
-  
+
   /// Menambahkan atau memperbarui GeoJSON sources & style layers di MapLibre
   Future<void> _syncMapLayers() async {
     if (!_isStyleLoaded || _mapController == null) return;
@@ -284,7 +342,9 @@ class _MapHomePageState extends State<MapHomePage> {
   }
 
   void _updateUserPuck() {
-    if (_mapController == null || !_isStyleLoaded || _gpsPosition == null) return;
+    if (_mapController == null || !_isStyleLoaded || _gpsPosition == null) {
+      return;
+    }
 
     final lat = _gpsPosition!.latitude;
     final lon = _gpsPosition!.longitude;
@@ -293,16 +353,16 @@ class _MapHomePageState extends State<MapHomePage> {
     try {
       _mapController!.setGeoJsonSource(_puckSourceId, {
         "type": "FeatureCollection",
-        "features": [{
-          "type": "Feature",
-          "geometry": {
-            "type": "Point",
-            "coordinates": [lon, lat] // Urutan GeoJSON: lon, lat
+        "features": [
+          {
+            "type": "Feature",
+            "geometry": {
+              "type": "Point",
+              "coordinates": [lon, lat], // Urutan GeoJSON: lon, lat
+            },
+            "properties": {"heading": heading},
           },
-          "properties": {
-            "heading": heading
-          }
-        }]
+        ],
       });
     } catch (e) {
       debugPrint('Gagal memperbarui puck: $e');
@@ -328,6 +388,7 @@ class _MapHomePageState extends State<MapHomePage> {
         _zoom = newZoom;
       });
     }
+    unawaited(_updateSelectedWaypointPosition());
   }
 
   // ==========================================
@@ -358,10 +419,7 @@ class _MapHomePageState extends State<MapHomePage> {
             _toolButton(
               icon: Icons.add_location_alt_outlined,
               tooltip: 'Tambah Titik',
-              color: _addingWaypoint ? Colors.amber : null,
-              onPressed: () {
-                setState(() => _addingWaypoint = !_addingWaypoint);
-              },
+              onPressed: _onAddWaypointPressed,
             ),
             Expanded(
               child: Center(
@@ -465,15 +523,90 @@ class _MapHomePageState extends State<MapHomePage> {
                   onStyleLoadedCallback: _onStyleLoaded,
                   onCameraIdle: _onCameraIdle,
                   onMapClick: (point, coordinates) {
-                    setState(() {
-                      _addingWaypoint = false;
-                    });
-                    // TODO: kalau mode "tambah titik" aktif → tambah marker
+                    unawaited(_handleWaypointMapClick(point));
                   },
                 ),
 
                 // 2) Crosshair di tengah
                 const IgnorePointer(child: Center(child: Crosshair())),
+
+                if (_selectedWaypoint != null && _tooltipPosition != null)
+                  Positioned.fill(
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        const tooltipHeight = 44.0;
+                        final tooltipWidth = math.min(
+                          220.0,
+                          constraints.maxWidth - 16,
+                        );
+                        final left = (_tooltipPosition!.dx - tooltipWidth / 2)
+                            .clamp(
+                              8.0,
+                              constraints.maxWidth - tooltipWidth - 8,
+                            );
+                        final top = (_tooltipPosition!.dy - tooltipHeight - 8)
+                            .clamp(
+                              8.0,
+                              constraints.maxHeight - tooltipHeight - 8,
+                            );
+                        final waypoint = _selectedWaypoint!;
+
+                        return Stack(
+                          children: [
+                            Positioned(
+                              left: left,
+                              top: top,
+                              width: tooltipWidth,
+                              height: tooltipHeight,
+                              child: Material(
+                                color: Colors.transparent,
+                                child: InkWell(
+                                  borderRadius: BorderRadius.circular(10),
+                                  onTap: () => _showWaypointForm(
+                                    initialLat: waypoint.latitude,
+                                    initialLng: waypoint.longitude,
+                                    initialWaypoint: waypoint,
+                                  ),
+                                  child: Container(
+                                    alignment: Alignment.center,
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 12,
+                                      vertical: 8,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF1E1E2E),
+                                      borderRadius: BorderRadius.circular(10),
+                                      border: Border.all(
+                                        color: Colors.amber,
+                                        width: 1.2,
+                                      ),
+                                      boxShadow: const [
+                                        BoxShadow(
+                                          color: Colors.black54,
+                                          blurRadius: 8,
+                                          offset: Offset(0, 3),
+                                        ),
+                                      ],
+                                    ),
+                                    child: Text(
+                                      waypoint.name,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      textAlign: TextAlign.center,
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        );
+                      },
+                    ),
+                  ),
 
                 // 3) GPS overlay (kanan bawah)
                 Positioned(
@@ -557,6 +690,234 @@ class _MapHomePageState extends State<MapHomePage> {
     setState(() => _showToolsPopup = false);
   }
 
+  // ==========================================
+  // WAYPOINT METHODS
+  // ==========================================
+
+  /// Memuat semua waypoint dari SQLite dan menyimpannya ke state.
+  Future<void> _loadWaypoints() async {
+    try {
+      final waypoints = await DatabaseHelper.instance.getAllWaypoints();
+      if (!mounted) return;
+      setState(() => _waypoints = waypoints);
+      // Render ke peta jika style sudah siap
+      if (_isStyleLoaded) {
+        await _updateWaypointsOnMap();
+      }
+    } catch (e) {
+      debugPrint('Gagal memuat waypoints: $e');
+    }
+  }
+
+  /// Dipanggil saat tombol "Tambah Titik" ditekan.
+  /// Mengambil koordinat crosshair (tengah peta) lalu membuka form.
+  Future<void> _onAddWaypointPressed() async {
+    final camera = _mapController?.cameraPosition;
+    if (camera == null) {
+      _showMapMessage('Peta belum siap. Coba lagi sebentar.');
+      return;
+    }
+
+    final lat = camera.target.latitude;
+    final lng = camera.target.longitude;
+
+    await _showWaypointForm(initialLat: lat, initialLng: lng);
+  }
+
+  Future<void> _handleWaypointMapClick(math.Point<double> point) async {
+    final controller = _mapController;
+    if (controller == null || !_isStyleLoaded) return;
+
+    try {
+      final features = await controller.queryRenderedFeatures(point, [
+        _waypointCircleLayerId,
+      ], null);
+      if (!mounted) return;
+
+      Waypoint? waypointAtTap;
+      for (final feature in features) {
+        if (feature is! Map) continue;
+        final properties = feature['properties'];
+        if (properties is! Map) continue;
+
+        final waypointId = properties['id']?.toString();
+        if (waypointId == null) continue;
+
+        Waypoint? waypoint;
+        for (final candidate in _waypoints) {
+          if (candidate.id == waypointId) {
+            waypoint = candidate;
+            break;
+          }
+        }
+
+        if (waypoint != null) {
+          waypointAtTap = waypoint;
+          break;
+        }
+      }
+
+      if (waypointAtTap == null) {
+        setState(() {
+          _selectedWaypoint = null;
+          _tooltipPosition = null;
+        });
+        return;
+      }
+
+      final screenLocation = await controller.toScreenLocation(
+        ml.LatLng(waypointAtTap.latitude, waypointAtTap.longitude),
+      );
+      if (!mounted) return;
+      setState(() {
+        _selectedWaypoint = waypointAtTap;
+        _tooltipPosition = Offset(
+          screenLocation.x.toDouble(),
+          screenLocation.y.toDouble(),
+        );
+      });
+    } catch (error) {
+      debugPrint('Gagal memilih waypoint di peta: $error');
+      if (mounted) {
+        _showMapMessage('Tidak dapat membuka waypoint: $error');
+      }
+    }
+  }
+
+  Future<void> _updateSelectedWaypointPosition() async {
+    final waypointId = _selectedWaypoint?.id;
+    final controller = _mapController;
+    if (waypointId == null || controller == null || !_isStyleLoaded) return;
+
+    Waypoint? waypoint;
+    for (final current in _waypoints) {
+      if (current.id == waypointId) {
+        waypoint = current;
+        break;
+      }
+    }
+    if (waypoint == null) {
+      if (mounted) {
+        setState(() {
+          _selectedWaypoint = null;
+          _tooltipPosition = null;
+        });
+      }
+      return;
+    }
+
+    try {
+      final screenLocation = await controller.toScreenLocation(
+        ml.LatLng(waypoint.latitude, waypoint.longitude),
+      );
+      if (!mounted || _selectedWaypoint?.id != waypoint.id) return;
+      setState(() {
+        _selectedWaypoint = waypoint;
+        _tooltipPosition = Offset(
+          screenLocation.x.toDouble(),
+          screenLocation.y.toDouble(),
+        );
+      });
+    } catch (error) {
+      debugPrint('Gagal memperbarui posisi tooltip waypoint: $error');
+      if (mounted) {
+        setState(() {
+          _selectedWaypoint = null;
+          _tooltipPosition = null;
+        });
+      }
+    }
+  }
+
+  Future<void> _showWaypointForm({
+    required double initialLat,
+    required double initialLng,
+    Waypoint? initialWaypoint,
+  }) async {
+    if (!mounted) return;
+
+    final result = await WaypointFormSheet.show(
+      context,
+      initialLat: initialLat,
+      initialLng: initialLng,
+      initialWaypoint: initialWaypoint,
+    );
+    if (result == null || !mounted) return;
+
+    try {
+      if (result case WaypointSaved(:final waypoint)) {
+        if (initialWaypoint == null) {
+          await DatabaseHelper.instance.insertWaypoint(waypoint);
+          if (!mounted) return;
+          setState(() => _waypoints = [..._waypoints, waypoint]);
+          _showMapMessage('"${waypoint.name}" berhasil disimpan.');
+        } else {
+          await DatabaseHelper.instance.updateWaypoint(waypoint);
+          if (!mounted) return;
+          setState(() {
+            _waypoints = _waypoints
+                .map(
+                  (current) => current.id == waypoint.id ? waypoint : current,
+                )
+                .toList();
+          });
+          _showMapMessage('"${waypoint.name}" berhasil diperbarui.');
+        }
+      } else if (result case WaypointDeleted(:final waypointId)) {
+        await DatabaseHelper.instance.deleteWaypoint(waypointId);
+        if (!mounted) return;
+        setState(() {
+          _waypoints = _waypoints
+              .where((waypoint) => waypoint.id != waypointId)
+              .toList();
+        });
+        _showMapMessage('Waypoint berhasil dihapus.');
+      }
+      await _updateWaypointsOnMap();
+    } catch (error) {
+      if (mounted) {
+        _showMapMessage('Gagal menyimpan perubahan waypoint: $error');
+      }
+    }
+  }
+
+  /// Mengonversi list [_waypoints] ke GeoJSON dan memperbarui source di peta.
+  Future<void> _updateWaypointsOnMap() async {
+    if (!_isStyleLoaded || _mapController == null) return;
+    try {
+      await _mapController!.setGeoJsonSource(
+        _waypointSourceId,
+        _buildWaypointsGeoJson(_waypoints),
+      );
+      await _updateSelectedWaypointPosition();
+    } catch (e) {
+      debugPrint('Gagal memperbarui waypoints di peta: $e');
+    }
+  }
+
+  /// Membangun Map GeoJSON FeatureCollection dari list [waypoints].
+  Map<String, dynamic> _buildWaypointsGeoJson(List<Waypoint> waypoints) {
+    return {
+      'type': 'FeatureCollection',
+      'features': waypoints
+          .map(
+            (w) => {
+              'type': 'Feature',
+              'geometry': {
+                'type': 'Point',
+                'coordinates': [w.longitude, w.latitude], // GeoJSON: [lon, lat]
+              },
+              'properties': {
+                'id': w.id,
+                'name': w.name,
+                'description': w.description,
+              },
+            },
+          )
+          .toList(),
+    };
+  }
+
   Future<void> _loadMapLibrary() async {
     try {
       final storedFiles = await MapFileStore.listStoredMapFiles();
@@ -623,7 +984,10 @@ class _MapHomePageState extends State<MapHomePage> {
   }
 
   String _cleanMapName(String fileName) {
-    return fileName.replaceAll(RegExp(r'\.(kml|kmz)$', caseSensitive: false), '');
+    return fileName.replaceAll(
+      RegExp(r'\.(kml|kmz)$', caseSensitive: false),
+      '',
+    );
   }
 
   Future<void> _importMap() async {
@@ -672,7 +1036,8 @@ class _MapHomePageState extends State<MapHomePage> {
     ImportedMap targetMap = map;
 
     if (activate) {
-      final isLazyPlaceholder = map.points.isEmpty &&
+      final isLazyPlaceholder =
+          map.points.isEmpty &&
           map.lines.isEmpty &&
           map.polygons.isEmpty &&
           map.overlays.isEmpty;
@@ -857,19 +1222,20 @@ class _MapHomePageState extends State<MapHomePage> {
         _gpsActive = true;
         _gpsStatus = 'Mencari sinyal';
       });
-      _positionSubscription ??= Geolocator.getPositionStream(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.bestForNavigation,
-          distanceFilter: 3,
-        ),
-      ).listen(
-        _updateGpsPosition,
-        onError: (Object error) {
-          if (!mounted) return;
-          setState(() => _gpsStatus = 'GPS bermasalah');
-          _showGpsMessage('Gagal menerima pembaruan lokasi: $error');
-        },
-      );
+      _positionSubscription ??=
+          Geolocator.getPositionStream(
+            locationSettings: const LocationSettings(
+              accuracy: LocationAccuracy.bestForNavigation,
+              distanceFilter: 3,
+            ),
+          ).listen(
+            _updateGpsPosition,
+            onError: (Object error) {
+              if (!mounted) return;
+              setState(() => _gpsStatus = 'GPS bermasalah');
+              _showGpsMessage('Gagal menerima pembaruan lokasi: $error');
+            },
+          );
 
       final position = await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
