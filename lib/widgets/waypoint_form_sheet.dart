@@ -1,5 +1,9 @@
-import 'package:flutter/material.dart';
+import 'dart:io';
 
+import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+
+import '../services/photo_service.dart';
 import '../models/waypoint.dart';
 
 sealed class WaypointFormResult {
@@ -61,8 +65,11 @@ class _WaypointFormSheetState extends State<WaypointFormSheet> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _nameCtrl;
   late final TextEditingController _descCtrl;
+  final PhotoService _photoService = PhotoService();
 
   bool _isSaving = false;
+  bool _isPickingPhoto = false;
+  String? _photoPath;
 
   bool get _isEditing => widget.initialWaypoint != null;
 
@@ -72,6 +79,7 @@ class _WaypointFormSheetState extends State<WaypointFormSheet> {
     final w = widget.initialWaypoint;
     _nameCtrl = TextEditingController(text: w?.name ?? '');
     _descCtrl = TextEditingController(text: w?.description ?? '');
+    _photoPath = w?.photoPath;
   }
 
   @override
@@ -94,15 +102,36 @@ class _WaypointFormSheetState extends State<WaypointFormSheet> {
         ? w.copyWith(
             name: _nameCtrl.text.trim(),
             description: _descCtrl.text.trim(),
+            photoPath: _photoPath,
           )
         : Waypoint(
             name: _nameCtrl.text.trim(),
             description: _descCtrl.text.trim(),
             latitude: widget.initialLat,
             longitude: widget.initialLng,
+            photoPath: _photoPath,
           );
 
     Navigator.of(context).pop(WaypointSaved(updatedWaypoint));
+  }
+
+  Future<void> _pickPhoto(ImageSource source) async {
+    if (_isPickingPhoto || _isSaving) return;
+    setState(() => _isPickingPhoto = true);
+    try {
+      final photoPath = await _photoService.pickAndSaveImage(source);
+      if (mounted && photoPath != null) {
+        setState(() => _photoPath = photoPath);
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Gagal memilih atau menyimpan foto: $error')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isPickingPhoto = false);
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -280,20 +309,75 @@ class _WaypointFormSheetState extends State<WaypointFormSheet> {
   }
 
   Widget _buildPhotoSection() {
-    return OutlinedButton.icon(
-      onPressed: () {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Pemilihan foto belum tersedia.')),
-        );
-      },
-      style: OutlinedButton.styleFrom(
-        foregroundColor: Colors.white70,
-        side: const BorderSide(color: Colors.white24),
-        padding: const EdgeInsets.symmetric(vertical: 14),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      ),
-      icon: const Icon(Icons.add_a_photo_outlined),
-      label: const Text('Tambah Foto (opsional)'),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: Container(
+            height: 150,
+            width: double.infinity,
+            color: Colors.white.withValues(alpha: 0.06),
+            alignment: Alignment.center,
+            child: _photoPath == null
+                ? const Icon(
+                    Icons.add_a_photo_outlined,
+                    color: Colors.white38,
+                    size: 36,
+                  )
+                : Image.file(
+                    File(_photoPath!),
+                    width: double.infinity,
+                    height: 150,
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stackTrace) => const Icon(
+                      Icons.broken_image_outlined,
+                      color: Colors.white38,
+                      size: 36,
+                    ),
+                  ),
+          ),
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: _isPickingPhoto || _isSaving
+                    ? null
+                    : () => _pickPhoto(ImageSource.camera),
+                style: _photoButtonStyle(),
+                icon: const Icon(Icons.camera_alt_outlined),
+                label: const Text('Kamera'),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: _isPickingPhoto || _isSaving
+                    ? null
+                    : () => _pickPhoto(ImageSource.gallery),
+                style: _photoButtonStyle(),
+                icon: const Icon(Icons.photo_library_outlined),
+                label: const Text('Galeri'),
+              ),
+            ),
+          ],
+        ),
+        if (_isPickingPhoto) ...[
+          const SizedBox(height: 8),
+          const LinearProgressIndicator(color: Colors.amber),
+        ],
+      ],
+    );
+  }
+
+  ButtonStyle _photoButtonStyle() {
+    return OutlinedButton.styleFrom(
+      foregroundColor: Colors.white70,
+      side: const BorderSide(color: Colors.white24),
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
     );
   }
 

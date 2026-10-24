@@ -1,10 +1,11 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart'; // Ditambahkan untuk rootBundle
+import 'package:flutter/services.dart';
 import 'package:flutter_compass/flutter_compass.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
@@ -58,8 +59,7 @@ class _MapHomePageState extends State<MapHomePage> {
   // Konstanta ID Source dan Layer Waypoint
   static const String _waypointSourceId = 'waypoints-source';
   static const String _waypointCircleLayerId = 'waypoints-circle-layer';
-  static const String _waypointLabelLayerId = 'waypoints-label-layer';
-
+  
   // Konstanta ID Source dan Layer Puck (Lokasi Pengguna)
   static const String _puckSourceId = 'user-puck-source';
   static const String _puckLayerId = 'user-puck-layer';
@@ -192,22 +192,6 @@ class _MapHomePageState extends State<MapHomePage> {
           circleStrokeWidth: 2.0,
         ),
       );
-      // Label nama waypoint di bawah circle
-      await _mapController!.addSymbolLayer(
-        _waypointSourceId,
-        _waypointLabelLayerId,
-        const ml.SymbolLayerProperties(
-          textField: ['get', 'name'],
-          textSize: 11,
-          textColor: '#FFFFFF',
-          textHaloColor: '#000000',
-          textHaloWidth: 1.5,
-          textOffset: [0, 1.6],
-          textAnchor: 'top',
-          textAllowOverlap: false,
-          textIgnorePlacement: false,
-        ),
-      );
     } catch (e) {
       debugPrint('Gagal menambahkan layer waypoints: $e');
     }
@@ -222,11 +206,7 @@ class _MapHomePageState extends State<MapHomePage> {
     if (!_showLayersView && activeMaps.isNotEmpty) {
       _fitMapToImportedMaps(activeMaps);
     }
-  } // <--- INI ADALAH KURUNG KURAWAL PENUTUP _onStyleLoaded
-
-  // ==========================================
-  // METHOD BARU DITARUH DI SINI (SETELAH PENUTUP)
-  // ==========================================
+  }
 
   void _zoomToLayerByName(String layerName) {
     for (final map in _importedMaps) {
@@ -493,7 +473,6 @@ class _MapHomePageState extends State<MapHomePage> {
               children: [
                 // 1) Peta MapLibre GL
                 ml.MapLibreMap(
-                  //styleString: 'https://tiles.openfreemap.org/styles/positron',
                   styleString: '''{
                    "version": 8,
                      "sources": {
@@ -510,7 +489,7 @@ class _MapHomePageState extends State<MapHomePage> {
                              "source": "google_sat"
                           }
                       ]
-                  }''', // <-- Gunakan raw string JSON ini
+                  }''',
                   initialCameraPosition: ml.CameraPosition(
                     target: ml.LatLng(_center.latitude, _center.longitude),
                     zoom: _zoom,
@@ -522,6 +501,10 @@ class _MapHomePageState extends State<MapHomePage> {
                   onMapCreated: _onMapCreated,
                   onStyleLoadedCallback: _onStyleLoaded,
                   onCameraIdle: _onCameraIdle,
+
+                  // PERBAIKAN 1: Aktifkan agar onMapClick terpicu saat klik marker
+                  featureTapsTriggersMapClick: true,
+
                   onMapClick: (point, coordinates) {
                     unawaited(_handleWaypointMapClick(point));
                   },
@@ -627,7 +610,7 @@ class _MapHomePageState extends State<MapHomePage> {
                   top: MediaQuery.of(context).padding.top + kToolbarHeight + 8,
                   child: ActiveLayersOverlay(
                     layers: activeMaps.map((map) => map.name).toList(),
-                    onLayerTap: _zoomToLayerByName, // <-- Tambahkan baris ini
+                    onLayerTap: _zoomToLayerByName,
                   ),
                 ),
 
@@ -694,13 +677,11 @@ class _MapHomePageState extends State<MapHomePage> {
   // WAYPOINT METHODS
   // ==========================================
 
-  /// Memuat semua waypoint dari SQLite dan menyimpannya ke state.
   Future<void> _loadWaypoints() async {
     try {
       final waypoints = await DatabaseHelper.instance.getAllWaypoints();
       if (!mounted) return;
       setState(() => _waypoints = waypoints);
-      // Render ke peta jika style sudah siap
       if (_isStyleLoaded) {
         await _updateWaypointsOnMap();
       }
@@ -709,8 +690,6 @@ class _MapHomePageState extends State<MapHomePage> {
     }
   }
 
-  /// Dipanggil saat tombol "Tambah Titik" ditekan.
-  /// Mengambil koordinat crosshair (tengah peta) lalu membuka form.
   Future<void> _onAddWaypointPressed() async {
     final camera = _mapController?.cameraPosition;
     if (camera == null) {
@@ -729,9 +708,12 @@ class _MapHomePageState extends State<MapHomePage> {
     if (controller == null || !_isStyleLoaded) return;
 
     try {
-      final features = await controller.queryRenderedFeatures(point, [
-        _waypointCircleLayerId,
-      ], null);
+      // PERBAIKAN: Gunakan argumen posisi (bukan named parameter)
+      final features = await controller.queryRenderedFeatures(
+        point,
+        [_waypointCircleLayerId], // layerIds (posisi ke-2)
+        null, // filter (posisi ke-3)
+      );
       if (!mounted) return;
 
       Waypoint? waypointAtTap;
@@ -865,13 +847,28 @@ class _MapHomePageState extends State<MapHomePage> {
         }
       } else if (result case WaypointDeleted(:final waypointId)) {
         await DatabaseHelper.instance.deleteWaypoint(waypointId);
+        String? photoCleanupError;
+        final photoPath = initialWaypoint?.photoPath;
+        if (photoPath != null) {
+          try {
+            final photoFile = File(photoPath);
+            if (await photoFile.exists()) await photoFile.delete();
+          } catch (error) {
+            photoCleanupError = '$error';
+          }
+        }
         if (!mounted) return;
         setState(() {
           _waypoints = _waypoints
               .where((waypoint) => waypoint.id != waypointId)
               .toList();
         });
-        _showMapMessage('Waypoint berhasil dihapus.');
+        _showMapMessage(
+          photoCleanupError == null
+              ? 'Waypoint berhasil dihapus.'
+              : 'Waypoint dihapus, tetapi foto gagal dihapus: '
+                    '$photoCleanupError',
+        );
       }
       await _updateWaypointsOnMap();
     } catch (error) {
@@ -881,7 +878,6 @@ class _MapHomePageState extends State<MapHomePage> {
     }
   }
 
-  /// Mengonversi list [_waypoints] ke GeoJSON dan memperbarui source di peta.
   Future<void> _updateWaypointsOnMap() async {
     if (!_isStyleLoaded || _mapController == null) return;
     try {
@@ -895,7 +891,6 @@ class _MapHomePageState extends State<MapHomePage> {
     }
   }
 
-  /// Membangun Map GeoJSON FeatureCollection dari list [waypoints].
   Map<String, dynamic> _buildWaypointsGeoJson(List<Waypoint> waypoints) {
     return {
       'type': 'FeatureCollection',
