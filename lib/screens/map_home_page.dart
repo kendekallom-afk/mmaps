@@ -30,6 +30,9 @@ class MapHomePage extends StatefulWidget {
   State<MapHomePage> createState() => _MapHomePageState();
 }
 
+static const String _puckSourceId = 'user-puck-source';
+static const String _puckLayerId = 'user-puck-layer';
+
 class _MapHomePageState extends State<MapHomePage> {
   // Controller MapLibre & status pemuatan
   ml.MapLibreMapController? _mapController;
@@ -86,6 +89,7 @@ class _MapHomePageState extends State<MapHomePage> {
         (event) {
           if (!mounted) return;
           setState(() => _compassHeading = event.heading);
+           _updateUserPuck();
         },
         onError: (Object error) {
           if (!mounted) return;
@@ -102,7 +106,27 @@ class _MapHomePageState extends State<MapHomePage> {
     _mapController?.dispose();
     super.dispose();
   }
+void _updateUserPuck() {
+  if (_mapController == null || !_isStyleLoaded || _gpsPosition == null) return;
 
+  final lat = _gpsPosition!.latitude;
+  final lon = _gpsPosition!.longitude;
+  final heading = _compassHeading ?? 0.0; // Default ke utara jika kompas null
+
+  _mapController!.setGeoJsonSource(_puckSourceId, {
+    "type": "FeatureCollection",
+    "features": [{
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [lon, lat] // Perhatikan urutan: lon, lat
+      },
+      "properties": {
+        "heading": heading // Properti ini yang dibaca oleh iconRotate
+      }
+    }]
+  });
+}
   // ==========================================
   // SIKLUS HIDUP MAPLIBRE SOURCES & STYLE LAYERS
   // ==========================================
@@ -115,6 +139,30 @@ class _MapHomePageState extends State<MapHomePage> {
   void _onStyleLoaded() async {
     _isStyleLoaded = true;
     _layersInitialized = false; // Reset status saat style di-reload
+    // Tambahkan gambar puck ke style MapLibre
+await _mapController!.addImage(
+  'puck-icon', 
+  await rootBundle.load('assets/images/location_puck.png'),
+);
+
+// Tambahkan source GeoJSON kosong untuk puck
+await _mapController!.addGeoJsonSource(_puckSourceId, {
+  "type": "FeatureCollection",
+  "features": []
+});
+
+// Tambahkan SymbolLayer untuk puck
+await _mapController!.addSymbolLayer(
+  _puckSourceId,
+  _puckLayerId,
+  const ml.SymbolLayerProperties(
+    iconImage: 'puck-icon',
+    iconSize: 0.5, // Sesuaikan ukuran
+    iconRotate: ['get', 'heading'], // Rotasi diambil dari properti GeoJSON
+    iconAllowOverlap: true,
+    iconIgnorePlacement: true,
+  ),
+);
     await _syncMapLayers();
 
     final activeMaps = _importedMaps.where((map) => map.isActive);
@@ -340,7 +388,7 @@ class _MapHomePageState extends State<MapHomePage> {
               children: [
                 // 1) Peta MapLibre GL
                 ml.MapLibreMap(
-                  styleString: 'https://demotiles.maplibre.org/style.json',
+                  styleString: 'https://tiles.openfreemap.org/styles/positron',
                   initialCameraPosition: ml.CameraPosition(
                     target: ml.LatLng(_center.latitude, _center.longitude),
                     zoom: _zoom,
@@ -348,7 +396,7 @@ class _MapHomePageState extends State<MapHomePage> {
                   trackCameraPosition: true,
                   myLocationEnabled: _gpsActive,
                   myLocationTrackingMode: ml.MyLocationTrackingMode.none,
-                  myLocationRenderMode: ml.MyLocationRenderMode.compass,
+                  myLocationRenderMode: ml.MyLocationRenderMode.normal,
                   onMapCreated: _onMapCreated,
                   onStyleLoadedCallback: _onStyleLoaded,
                   onCameraIdle: _onCameraIdle,
@@ -798,13 +846,35 @@ class _MapHomePageState extends State<MapHomePage> {
   }
 
   void _updateGpsPosition(Position position) {
-    if (!mounted) return;
-    setState(() {
-      _gpsPosition = position;
-      _gpsActive = true;
-      _gpsStatus = _gpsQuality(position.accuracy);
-    });
-  }
+  if (!mounted) return;
+  setState(() {
+    _gpsPosition = position;
+    _gpsActive = true;
+    _gpsStatus = _gpsQuality(position.accuracy);
+  });
+  _updateUserPuck();
+}
+void _updateUserPuck() {
+  if (_mapController == null || !_isStyleLoaded || _gpsPosition == null) return;
+
+  final lat = _gpsPosition!.latitude;
+  final lon = _gpsPosition!.longitude;
+  final heading = _compassHeading ?? 0.0;
+
+  _mapController!.setGeoJsonSource(_puckSourceId, {
+    "type": "FeatureCollection",
+    "features": [{
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [lon, lat]
+      },
+      "properties": {
+        "heading": heading
+      }
+    }]
+  });
+}
 
   void _moveMapToGpsPosition(Position position) {
     final target = ml.LatLng(position.latitude, position.longitude);
