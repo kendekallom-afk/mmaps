@@ -45,11 +45,20 @@ void main() {
 
     // 2. Verifikasi Label Koordinat dan Atribusi
     expect(find.text('Lat: -2.670000\nLon: 118.890000'), findsOneWidget);
+    final mapPlaceholderFinder = find.byKey(
+      const ValueKey('map-test-placeholder'),
+      skipOffstage: false,
+    );
+    final mapPlaceholderElement = tester.element(mapPlaceholderFinder);
 
     // 3. Uji Panel Layers
     await tester.tap(find.byTooltip('Tampilan Layers'));
     await tester.pumpAndSettle();
 
+    expect(
+      identical(mapPlaceholderElement, tester.element(mapPlaceholderFinder)),
+      isTrue,
+    );
     expect(find.text('Layers'), findsOneWidget);
     expect(find.text('Active Layers'), findsOneWidget);
     expect(find.text('Belum ada layer aktif'), findsOneWidget);
@@ -71,6 +80,10 @@ void main() {
     await tester.tap(find.byTooltip('Tampilan Peta'));
     await tester.pump(const Duration(milliseconds: 500));
     expect(find.text('Layers'), findsNothing);
+    expect(
+      identical(mapPlaceholderElement, tester.element(mapPlaceholderFinder)),
+      isTrue,
+    );
     expect(
       find.text('© OpenFreeMap · © OpenStreetMap contributors'),
       findsOneWidget,

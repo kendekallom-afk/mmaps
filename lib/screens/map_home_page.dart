@@ -115,7 +115,7 @@ class _MapHomePageState extends State<MapHomePage> {
         (event) {
           if (!mounted) return;
           setState(() => _compassHeading = event.heading);
-          _updateUserPuck();
+          unawaited(_updateUserPuck());
         },
         onError: (Object error) {
           if (!mounted) return;
@@ -139,6 +139,8 @@ class _MapHomePageState extends State<MapHomePage> {
 
   void _onMapCreated(ml.MapLibreMapController controller) {
     _mapController = controller;
+    _isStyleLoaded = false;
+    _layersInitialized = false;
   }
 
   /// Dipanggil otomatis setelah style JSON selesai dimuat oleh engine MapLibre
@@ -149,10 +151,7 @@ class _MapHomePageState extends State<MapHomePage> {
     // 1. Sinkronisasi layer KML
     await _syncMapLayers();
 
-    // 2. Update posisi puck
-    _updateUserPuck();
-
-    // 3. Tambahkan gambar puck
+    // 2. Tambahkan gambar puck
     try {
       final ByteData data = await rootBundle.load(
         'assets/images/location_puck.png',
@@ -163,7 +162,7 @@ class _MapHomePageState extends State<MapHomePage> {
       debugPrint('Image puck-icon gagal dimuat atau sudah ada: $e');
     }
 
-    // 4. Tambahkan source dan layer puck
+    // 3. Tambahkan source dan layer puck
     try {
       await _mapController!.addGeoJsonSource(_puckSourceId, {
         "type": "FeatureCollection",
@@ -183,6 +182,9 @@ class _MapHomePageState extends State<MapHomePage> {
     } catch (e) {
       debugPrint('Gagal menambahkan layer puck: $e');
     }
+
+    // 4. Update posisi puck setelah sourcenya tersedia.
+    await _updateUserPuck();
 
     // 5. Tambahkan source dan layer untuk waypoints
     try {
@@ -328,10 +330,10 @@ class _MapHomePageState extends State<MapHomePage> {
       _gpsActive = true;
       _gpsStatus = _gpsQuality(position.accuracy);
     });
-    _updateUserPuck();
+    unawaited(_updateUserPuck());
   }
 
-  void _updateUserPuck() {
+  Future<void> _updateUserPuck() async {
     if (_mapController == null || !_isStyleLoaded || _gpsPosition == null) {
       return;
     }
@@ -341,7 +343,7 @@ class _MapHomePageState extends State<MapHomePage> {
     final heading = _compassHeading ?? 0.0;
 
     try {
-      _mapController!.setGeoJsonSource(_puckSourceId, {
+      await _mapController!.setGeoJsonSource(_puckSourceId, {
         "type": "FeatureCollection",
         "features": [
           {
@@ -468,201 +470,217 @@ class _MapHomePageState extends State<MapHomePage> {
       ),
 
       // ===== MAP VIEW =====
-      body: _showLayersView
-          ? LayersView(
-              selectedTab: _selectedLibraryTab,
-              onTabChanged: (tab) => setState(() => _selectedLibraryTab = tab),
-              maps: _importedMaps,
-              customBasemaps: _customBasemaps,
-              activeBasemap: _activeBasemap,
-              onBasemapChanged: (basemap) =>
-                  setState(() => _activeBasemap = basemap),
-              onAddCustomBasemap: _addCustomBasemap,
-              onImportMap: _importMap,
-              onToggleMap: _toggleMapActive,
-              onRemoveMap: _removeMap,
-              importing: _importingMap,
-              loading: _loadingMaps,
-            )
-          : Stack(
-              children: [
-                // 1) Peta MapLibre GL
-                if (widget.useMapLibre)
-                  ml.MapLibreMap(
-                    key: ValueKey(_activeBasemap),
-                    styleString:
-                        _activeBasemap?.styleString ??
-                        '{"version":8,"sources":{},"layers":[]}',
-                    initialCameraPosition: ml.CameraPosition(
-                      target: ml.LatLng(_center.latitude, _center.longitude),
-                      zoom: _zoom,
+      body: Stack(
+        children: [
+          Positioned.fill(
+            child: Offstage(
+              offstage: _showLayersView,
+              child: Stack(
+                children: [
+                  // 1) Peta MapLibre GL
+                  if (widget.useMapLibre)
+                    ml.MapLibreMap(
+                      key: ValueKey(_activeBasemap),
+                      styleString:
+                          _activeBasemap?.styleString ??
+                          '{"version":8,"sources":{},"layers":[]}',
+                      initialCameraPosition: ml.CameraPosition(
+                        target: ml.LatLng(_center.latitude, _center.longitude),
+                        zoom: _zoom,
+                      ),
+                      trackCameraPosition: true,
+                      myLocationEnabled: false,
+                      myLocationTrackingMode: ml.MyLocationTrackingMode.none,
+                      myLocationRenderMode: ml.MyLocationRenderMode.normal,
+                      onMapCreated: _onMapCreated,
+                      onStyleLoadedCallback: _onStyleLoaded,
+                      onCameraIdle: _onCameraIdle,
+
+                      // Aktifkan klik peta ketika marker ditekan.
+                      featureTapsTriggersMapClick: true,
+
+                      onMapClick: (point, coordinates) {
+                        unawaited(_handleWaypointMapClick(point));
+                      },
+                    )
+                  else
+                    const ColoredBox(
+                      key: ValueKey('map-test-placeholder'),
+                      color: Colors.black12,
+                      child: SizedBox.expand(),
                     ),
-                    trackCameraPosition: true,
-                    myLocationEnabled: false,
-                    myLocationTrackingMode: ml.MyLocationTrackingMode.none,
-                    myLocationRenderMode: ml.MyLocationRenderMode.normal,
-                    onMapCreated: _onMapCreated,
-                    onStyleLoadedCallback: _onStyleLoaded,
-                    onCameraIdle: _onCameraIdle,
 
-                    // Aktifkan klik peta ketika marker ditekan.
-                    featureTapsTriggersMapClick: true,
+                  // 2) Crosshair di tengah
+                  const IgnorePointer(child: Center(child: Crosshair())),
 
-                    onMapClick: (point, coordinates) {
-                      unawaited(_handleWaypointMapClick(point));
-                    },
-                  )
-                else
-                  const ColoredBox(
-                    key: ValueKey('map-test-placeholder'),
-                    color: Colors.black12,
-                    child: SizedBox.expand(),
-                  ),
+                  if (_selectedWaypoint != null && _tooltipPosition != null)
+                    Positioned.fill(
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          const tooltipHeight = 44.0;
+                          final tooltipWidth = math.min(
+                            220.0,
+                            constraints.maxWidth - 16,
+                          );
+                          final left = (_tooltipPosition!.dx - tooltipWidth / 2)
+                              .clamp(
+                                8.0,
+                                constraints.maxWidth - tooltipWidth - 8,
+                              );
+                          final top = (_tooltipPosition!.dy - tooltipHeight - 8)
+                              .clamp(
+                                8.0,
+                                constraints.maxHeight - tooltipHeight - 8,
+                              );
+                          final waypoint = _selectedWaypoint!;
 
-                // 2) Crosshair di tengah
-                const IgnorePointer(child: Center(child: Crosshair())),
-
-                if (_selectedWaypoint != null && _tooltipPosition != null)
-                  Positioned.fill(
-                    child: LayoutBuilder(
-                      builder: (context, constraints) {
-                        const tooltipHeight = 44.0;
-                        final tooltipWidth = math.min(
-                          220.0,
-                          constraints.maxWidth - 16,
-                        );
-                        final left = (_tooltipPosition!.dx - tooltipWidth / 2)
-                            .clamp(
-                              8.0,
-                              constraints.maxWidth - tooltipWidth - 8,
-                            );
-                        final top = (_tooltipPosition!.dy - tooltipHeight - 8)
-                            .clamp(
-                              8.0,
-                              constraints.maxHeight - tooltipHeight - 8,
-                            );
-                        final waypoint = _selectedWaypoint!;
-
-                        return Stack(
-                          children: [
-                            Positioned(
-                              left: left,
-                              top: top,
-                              width: tooltipWidth,
-                              height: tooltipHeight,
-                              child: Material(
-                                color: Colors.transparent,
-                                child: InkWell(
-                                  borderRadius: BorderRadius.circular(10),
-                                  onTap: () => _showWaypointForm(
-                                    initialLat: waypoint.latitude,
-                                    initialLng: waypoint.longitude,
-                                    initialWaypoint: waypoint,
-                                  ),
-                                  child: Container(
-                                    alignment: Alignment.center,
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 12,
-                                      vertical: 8,
+                          return Stack(
+                            children: [
+                              Positioned(
+                                left: left,
+                                top: top,
+                                width: tooltipWidth,
+                                height: tooltipHeight,
+                                child: Material(
+                                  color: Colors.transparent,
+                                  child: InkWell(
+                                    borderRadius: BorderRadius.circular(10),
+                                    onTap: () => _showWaypointForm(
+                                      initialLat: waypoint.latitude,
+                                      initialLng: waypoint.longitude,
+                                      initialWaypoint: waypoint,
                                     ),
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFF1E1E2E),
-                                      borderRadius: BorderRadius.circular(10),
-                                      border: Border.all(
-                                        color: Colors.amber,
-                                        width: 1.2,
+                                    child: Container(
+                                      alignment: Alignment.center,
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 12,
+                                        vertical: 8,
                                       ),
-                                      boxShadow: const [
-                                        BoxShadow(
-                                          color: Colors.black54,
-                                          blurRadius: 8,
-                                          offset: Offset(0, 3),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF1E1E2E),
+                                        borderRadius: BorderRadius.circular(10),
+                                        border: Border.all(
+                                          color: Colors.amber,
+                                          width: 1.2,
                                         ),
-                                      ],
-                                    ),
-                                    child: Text(
-                                      waypoint.name,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      textAlign: TextAlign.center,
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontWeight: FontWeight.w600,
+                                        boxShadow: const [
+                                          BoxShadow(
+                                            color: Colors.black54,
+                                            blurRadius: 8,
+                                            offset: Offset(0, 3),
+                                          ),
+                                        ],
+                                      ),
+                                      child: Text(
+                                        waypoint.name,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        textAlign: TextAlign.center,
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.w600,
+                                        ),
                                       ),
                                     ),
                                   ),
                                 ),
                               ),
-                            ),
-                          ],
-                        );
-                      },
+                            ],
+                          );
+                        },
+                      ),
+                    ),
+
+                  // 3) GPS overlay (kanan bawah)
+                  Positioned(
+                    right: 12,
+                    bottom: 12,
+                    child: GpsOverlay(
+                      onTap: _centerOnGps,
+                      status: _gpsStatus,
+                      accuracy: _gpsPosition?.accuracy,
+                      heading: _compassHeading,
+                      loading: _gpsBusy,
                     ),
                   ),
 
-                // 3) GPS overlay (kanan bawah)
-                Positioned(
-                  right: 12,
-                  bottom: 12,
-                  child: GpsOverlay(
-                    onTap: _centerOnGps,
-                    status: _gpsStatus,
-                    accuracy: _gpsPosition?.accuracy,
-                    heading: _compassHeading,
-                    loading: _gpsBusy,
-                  ),
-                ),
-
-                // 4) Active layers overlay (kiri atas)
-                Positioned(
-                  left: 12,
-                  top: MediaQuery.of(context).padding.top + kToolbarHeight + 8,
-                  child: ActiveLayersOverlay(
-                    layers: [
-                      ...activeMaps.map((map) => map.name),
-                      if (_activeBasemap != null) _activeBasemap!.label,
-                    ],
-                    onLayerTap: _zoomToLayerByName,
-                  ),
-                ),
-
-                // 5) Opacity control (kanan bawah atas GPS)
-                Positioned(
-                  right: 12,
-                  bottom: 56,
-                  child: OpacityControl(
-                    expanded: _showOpacityPanel,
-                    value: _opacity,
-                    onToggle: () =>
-                        setState(() => _showOpacityPanel = !_showOpacityPanel),
-                    onChanged: (v) => setState(() => _opacity = v),
-                  ),
-                ),
-
-                Positioned(
-                  left: 8,
-                  bottom: 4,
-                  child: MapAttribution(
-                    attribution: _activeBasemap?.attribution,
-                  ),
-                ),
-
-                if (_showToolsPopup)
+                  // 4) Active layers overlay (kiri atas)
                   Positioned(
+                    left: 12,
                     top:
                         MediaQuery.of(context).padding.top + kToolbarHeight + 8,
-                    right: 8,
-                    child: ToolsPopup(
-                      onClose: () => setState(() => _showToolsPopup = false),
-                      onFindByCoordinate: _closeToolsPopup,
-                      onRecordTrack: _closeToolsPopup,
-                      onMeasure: _closeToolsPopup,
-                      onMapFeatures: _closeToolsPopup,
-                      onSettings: _closeToolsPopup,
+                    child: ActiveLayersOverlay(
+                      layers: [
+                        ...activeMaps.map((map) => map.name),
+                        if (_activeBasemap != null) _activeBasemap!.label,
+                      ],
+                      onLayerTap: _zoomToLayerByName,
                     ),
                   ),
-              ],
+
+                  // 5) Opacity control (kanan bawah atas GPS)
+                  Positioned(
+                    right: 12,
+                    bottom: 56,
+                    child: OpacityControl(
+                      expanded: _showOpacityPanel,
+                      value: _opacity,
+                      onToggle: () => setState(
+                        () => _showOpacityPanel = !_showOpacityPanel,
+                      ),
+                      onChanged: (v) => setState(() => _opacity = v),
+                    ),
+                  ),
+
+                  Positioned(
+                    left: 8,
+                    bottom: 4,
+                    child: MapAttribution(
+                      attribution: _activeBasemap?.attribution,
+                    ),
+                  ),
+
+                  if (_showToolsPopup)
+                    Positioned(
+                      top:
+                          MediaQuery.of(context).padding.top +
+                          kToolbarHeight +
+                          8,
+                      right: 8,
+                      child: ToolsPopup(
+                        onClose: () => setState(() => _showToolsPopup = false),
+                        onFindByCoordinate: _closeToolsPopup,
+                        onRecordTrack: _closeToolsPopup,
+                        onMeasure: _closeToolsPopup,
+                        onMapFeatures: _closeToolsPopup,
+                        onSettings: _closeToolsPopup,
+                      ),
+                    ),
+                ],
+              ),
             ),
+          ),
+          if (_showLayersView)
+            Positioned.fill(
+              child: LayersView(
+                selectedTab: _selectedLibraryTab,
+                onTabChanged: (tab) =>
+                    setState(() => _selectedLibraryTab = tab),
+                maps: _importedMaps,
+                customBasemaps: _customBasemaps,
+                activeBasemap: _activeBasemap,
+                onBasemapChanged: (basemap) =>
+                    setState(() => _activeBasemap = basemap),
+                onAddCustomBasemap: _addCustomBasemap,
+                onImportMap: _importMap,
+                onToggleMap: _toggleMapActive,
+                onRemoveMap: _removeMap,
+                importing: _importingMap,
+                loading: _loadingMaps,
+              ),
+            ),
+        ],
+      ),
     );
   }
 
