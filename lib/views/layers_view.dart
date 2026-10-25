@@ -16,6 +16,7 @@ class LayersView extends StatelessWidget {
   final ValueChanged<ImportedMap> onRemoveMap;
   final bool importing;
   final bool loading;
+  final Set<String> busyMapIds;
 
   const LayersView({
     super.key,
@@ -31,6 +32,7 @@ class LayersView extends StatelessWidget {
     required this.onRemoveMap,
     required this.importing,
     required this.loading,
+    this.busyMapIds = const {},
   });
 
   @override
@@ -112,6 +114,7 @@ class LayersView extends StatelessWidget {
                     onRemoveMap: onRemoveMap,
                     importing: importing,
                     loading: loading,
+                    busyMapIds: busyMapIds,
                   )
                 else
                   BasemapChoices(
@@ -136,6 +139,7 @@ class MapsLibrary extends StatelessWidget {
   final ValueChanged<ImportedMap> onRemoveMap;
   final bool importing;
   final bool loading;
+  final Set<String> busyMapIds;
 
   const MapsLibrary({
     super.key,
@@ -145,6 +149,7 @@ class MapsLibrary extends StatelessWidget {
     required this.onRemoveMap,
     required this.importing,
     required this.loading,
+    required this.busyMapIds,
   });
 
   @override
@@ -195,6 +200,7 @@ class MapsLibrary extends StatelessWidget {
               map: map,
               onToggle: () => onToggleMap(map),
               onRemove: () => onRemoveMap(map),
+              busy: busyMapIds.contains(map.id),
             ),
           ),
       ],
@@ -285,12 +291,14 @@ class LibraryMapItem extends StatelessWidget {
   final ImportedMap map;
   final VoidCallback onToggle;
   final VoidCallback onRemove;
+  final bool busy;
 
   const LibraryMapItem({
     super.key,
     required this.map,
     required this.onToggle,
     required this.onRemove,
+    this.busy = false,
   });
 
   @override
@@ -339,8 +347,14 @@ class LibraryMapItem extends StatelessWidget {
             ),
           ),
           TextButton(
-            onPressed: onToggle,
-            child: Text(map.isActive ? 'Aktif' : 'Tambah'),
+            onPressed: busy ? null : onToggle,
+            child: busy
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : Text(map.isActive ? 'Aktif' : 'Tambah'),
           ),
           IconButton(
             onPressed: onRemove,

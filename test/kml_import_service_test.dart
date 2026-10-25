@@ -1,7 +1,7 @@
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mmaps_flutter/services/kml_import_service.dart';
 
@@ -51,6 +51,26 @@ void main() {
     expect(map.polygons, hasLength(1));
     expect(map.polygons.single.holes, hasLength(1));
     expect(map.bounds, isNotNull);
+  });
+
+  test('KML parse result can be transferred from compute isolate', () async {
+    final map = await compute(parseKmlInBackground, (
+      id: 'isolate',
+      fileName: 'isolate.kml',
+      bytes: Uint8List.fromList(
+        utf8.encode('''
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document><name>Isolate map</name><Placemark>
+    <Point><coordinates>118.5,-2.5,0</coordinates></Point>
+  </Placemark></Document>
+</kml>
+'''),
+      ),
+    ));
+
+    expect(map.name, 'Isolate map');
+    expect(map.points.single.point.latitude, -2.5);
+    expect(map.points.single.color, isNotNull);
   });
 
   test('reads an embedded GroundOverlay image from KMZ', () {

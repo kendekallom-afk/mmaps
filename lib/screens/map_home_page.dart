@@ -43,12 +43,13 @@ class MapHomePage extends StatefulWidget {
 }
 
 class _MapHomePageState extends State<MapHomePage> {
+  static const int _maxImportBytes = 100 * 1024 * 1024;
+
   // Controller MapLibre & status pemuatan
   ml.MapLibreMapController? _mapController;
   bool _isStyleLoaded = false;
   bool _layersInitialized = false;
 
-  final KmlImportService _kmlImportService = KmlImportService();
   StreamSubscription<Position>? _positionSubscription;
   StreamSubscription<CompassEvent>? _compassSubscription;
 
@@ -83,6 +84,7 @@ class _MapHomePageState extends State<MapHomePage> {
   List<Basemap> _customBasemaps = [];
   bool _loadingMaps = true;
   bool _importingMap = false;
+  final Set<String> _busyMapIds = {};
 
   // State waypoints
   List<Waypoint> _waypoints = [];
@@ -677,6 +679,7 @@ class _MapHomePageState extends State<MapHomePage> {
                 onRemoveMap: _removeMap,
                 importing: _importingMap,
                 loading: _loadingMaps,
+                busyMapIds: _busyMapIds,
               ),
             ),
         ],
@@ -1011,11 +1014,11 @@ class _MapHomePageState extends State<MapHomePage> {
         if (isActive) {
           try {
             final bytes = await MapFileStore.readStoredMapFile(fileInfo.id);
-            final map = _kmlImportService.parse(
+            final map = await compute(parseKmlInBackground, (
               id: fileInfo.id,
               fileName: fileInfo.name,
               bytes: bytes,
-            );
+            ));
             map.isActive = true;
             maps.add(map);
           } catch (error) {
@@ -1084,16 +1087,18 @@ class _MapHomePageState extends State<MapHomePage> {
       if (file == null) return;
 
       final fileSize = await file.length();
-      if (fileSize != null && fileSize > 500 * 1024 * 1024) {
-        throw const FormatException('Ukuran file melebihi batas 500 MB.');
+      if (fileSize != null && fileSize > _maxImportBytes) {
+        throw const FormatException(
+          'Ukuran file melebihi batas 100 MB. Pilih file KML/KMZ yang lebih kecil.',
+        );
       }
       final bytes = await file.readAsBytes();
       final id = DateTime.now().microsecondsSinceEpoch.toString();
-      final map = _kmlImportService.parse(
+      final map = await compute(parseKmlInBackground, (
         id: id,
         fileName: file.name,
         bytes: bytes,
-      );
+      ));
 
       await MapFileStore.save(
         StoredMapFile(id: id, name: file.name, bytes: bytes),
@@ -1113,6 +1118,7 @@ class _MapHomePageState extends State<MapHomePage> {
   }
 
   Future<void> _toggleMapActive(ImportedMap map) async {
+    if (_busyMapIds.contains(map.id)) return;
     final activate = !map.isActive;
     ImportedMap targetMap = map;
 
@@ -1124,18 +1130,21 @@ class _MapHomePageState extends State<MapHomePage> {
           map.overlays.isEmpty;
 
       if (isLazyPlaceholder) {
+        setState(() => _busyMapIds.add(map.id));
         try {
           final bytes = await MapFileStore.readStoredMapFile(map.id);
-          targetMap = _kmlImportService.parse(
+          targetMap = await compute(parseKmlInBackground, (
             id: map.id,
             fileName: map.fileName,
             bytes: bytes,
-          );
+          ));
         } catch (error) {
           if (mounted) {
             _showMapMessage('Gagal membaca/parse file ${map.fileName}: $error');
           }
           return;
+        } finally {
+          if (mounted) setState(() => _busyMapIds.remove(map.id));
         }
       }
     }

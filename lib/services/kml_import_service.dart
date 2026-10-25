@@ -1,4 +1,3 @@
-
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -9,6 +8,16 @@ import 'package:latlong2/latlong.dart';
 import 'package:xml/xml.dart';
 
 import '../models/imported_map.dart';
+
+ImportedMap parseKmlInBackground(
+  ({String id, String fileName, Uint8List bytes}) input,
+) {
+  return KmlImportService().parse(
+    id: input.id,
+    fileName: input.fileName,
+    bytes: input.bytes,
+  );
+}
 
 class KmlImportService {
   static const int maxDocumentBytes = 50 * 1024 * 1024;
@@ -25,29 +34,19 @@ class KmlImportService {
     final extension = fileName.split('.').last.toLowerCase();
 
     if (extension != 'kml' && extension != 'kmz') {
-      throw const FormatException(
-        'Pilih file dengan format .kml atau .kmz.',
-      );
+      throw const FormatException('Pilih file dengan format .kml atau .kmz.');
     }
 
     if (bytes.length > 500 * 1024 * 1024) {
-      throw const FormatException(
-        'Ukuran file melebihi batas 500 MB.',
-      );
+      throw const FormatException('Ukuran file melebihi batas 500 MB.');
     }
 
     final documentData = extension == 'kmz'
         ? _readKmz(bytes)
-        : _KmlSource(
-            bytes: bytes,
-            assets: const {},
-            baseDirectory: '',
-          );
+        : _KmlSource(bytes: bytes, assets: const {}, baseDirectory: '');
 
     if (documentData.bytes.length > maxDocumentBytes) {
-      throw const FormatException(
-        'Ukuran dokumen KML melebihi batas 50 MB.',
-      );
+      throw const FormatException('Ukuran dokumen KML melebihi batas 50 MB.');
     }
 
     final xml = XmlDocument.parse(utf8.decode(documentData.bytes));
@@ -112,10 +111,7 @@ class KmlImportService {
             }
 
           case 'Polygon':
-            final outer = _firstDescendant(
-              geometry,
-              'outerBoundaryIs',
-            );
+            final outer = _firstDescendant(geometry, 'outerBoundaryIs');
 
             final outerPoints = outer == null
                 ? <LatLng>[]
@@ -123,10 +119,7 @@ class KmlImportService {
 
             if (outerPoints.length >= 3) {
               final holes = geometry.descendantElements
-                  .where(
-                    (element) =>
-                        element.localName == 'innerBoundaryIs',
-                  )
+                  .where((element) => element.localName == 'innerBoundaryIs')
                   .map(_coordinates)
                   .where((ring) => ring.length >= 3)
                   .toList();
@@ -174,9 +167,7 @@ class KmlImportService {
       if (assetFile == null) continue;
 
       if (assetFile.size > maxOverlayBytes) {
-        throw FormatException(
-          'Gambar overlay "$href" melebihi batas 80 MB.',
-        );
+        throw FormatException('Gambar overlay "$href" melebihi batas 80 MB.');
       }
 
       totalOverlayBytes += assetFile.size;
@@ -225,8 +216,7 @@ class KmlImportService {
           ),
     );
 
-    final totalCoordinates =
-        lineCoordinateCount + polygonCoordinateCount;
+    final totalCoordinates = lineCoordinateCount + polygonCoordinateCount;
 
     stopwatch.stop();
 
@@ -245,8 +235,7 @@ class KmlImportService {
     final document = _firstDescendant(xml, 'Document');
 
     final documentName =
-        (document == null ? null : _childText(document, 'name')) ??
-        fileName;
+        (document == null ? null : _childText(document, 'name')) ?? fileName;
 
     return ImportedMap(
       id: id,
@@ -318,8 +307,7 @@ class KmlImportService {
 
       final fillStr = _childText(polyStyle, 'fill');
 
-      if (fillStr != null &&
-          (fillStr == '0' || fillStr == 'false')) {
+      if (fillStr != null && (fillStr == '0' || fillStr == 'false')) {
         result.polyFillOpacity = 0.0;
       }
     }
@@ -466,10 +454,7 @@ class KmlImportService {
       return null;
     }
 
-    return LatLngBounds.fromPoints([
-      LatLng(north, west),
-      LatLng(south, east),
-    ]);
+    return LatLngBounds.fromPoints([LatLng(north, west), LatLng(south, east)]);
   }
 
   String? _childText(XmlElement element, String name) {
