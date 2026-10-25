@@ -1,11 +1,16 @@
 import 'package:flutter/material.dart';
 
+import '../models/basemap.dart';
 import '../models/imported_map.dart';
 
 class LayersView extends StatelessWidget {
   final int selectedTab;
   final ValueChanged<int> onTabChanged;
   final List<ImportedMap> maps;
+  final List<Basemap> customBasemaps;
+  final Basemap? activeBasemap;
+  final ValueChanged<Basemap?> onBasemapChanged;
+  final Future<void> Function() onAddCustomBasemap;
   final VoidCallback onImportMap;
   final ValueChanged<ImportedMap> onToggleMap;
   final ValueChanged<ImportedMap> onRemoveMap;
@@ -17,6 +22,10 @@ class LayersView extends StatelessWidget {
     required this.selectedTab,
     required this.onTabChanged,
     required this.maps,
+    required this.customBasemaps,
+    required this.activeBasemap,
+    required this.onBasemapChanged,
+    required this.onAddCustomBasemap,
     required this.onImportMap,
     required this.onToggleMap,
     required this.onRemoveMap,
@@ -51,7 +60,8 @@ class LayersView extends StatelessWidget {
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(height: 10),
-                if (maps.where((map) => map.isActive).isEmpty)
+                if (maps.where((map) => map.isActive).isEmpty &&
+                    activeBasemap == null)
                   const EmptyLibrary(
                     icon: Icons.layers_clear_outlined,
                     title: 'Belum ada layer aktif',
@@ -66,6 +76,11 @@ class LayersView extends StatelessWidget {
                           onRemove: () => onToggleMap(map),
                         ),
                       ),
+                if (activeBasemap case final basemap?)
+                  ActiveBasemapItem(
+                    basemap: basemap,
+                    onRemove: () => onBasemapChanged(null),
+                  ),
                 const SizedBox(height: 24),
                 Container(
                   decoration: BoxDecoration(
@@ -99,7 +114,12 @@ class LayersView extends StatelessWidget {
                     loading: loading,
                   )
                 else
-                  const BasemapChoices(),
+                  BasemapChoices(
+                    activeBasemap: activeBasemap,
+                    onBasemapChanged: onBasemapChanged,
+                    customBasemaps: customBasemaps,
+                    onAddCustomBasemap: onAddCustomBasemap,
+                  ),
               ],
             ),
           ),
@@ -212,6 +232,45 @@ class ActiveMapItem extends StatelessWidget {
           IconButton(
             onPressed: onRemove,
             tooltip: 'Keluarkan ${map.name} dari Active Layers',
+            icon: const Icon(Icons.remove_circle_outline),
+            color: Colors.black54,
+            visualDensity: VisualDensity.compact,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class ActiveBasemapItem extends StatelessWidget {
+  final Basemap basemap;
+  final VoidCallback onRemove;
+
+  const ActiveBasemapItem({
+    super.key,
+    required this.basemap,
+    required this.onRemove,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFDCE8EF),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.map_outlined, color: Color(0xFF5D839E), size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(basemap.label, style: const TextStyle(fontSize: 13)),
+          ),
+          IconButton(
+            onPressed: onRemove,
+            tooltip: 'Keluarkan ${basemap.label} dari Active Layers',
             icon: const Icon(Icons.remove_circle_outline),
             color: Colors.black54,
             visualDensity: VisualDensity.compact,
@@ -374,30 +433,55 @@ class EmptyLibrary extends StatelessWidget {
 }
 
 class BasemapChoices extends StatelessWidget {
-  const BasemapChoices({super.key});
+  final Basemap? activeBasemap;
+  final ValueChanged<Basemap?> onBasemapChanged;
+  final List<Basemap> customBasemaps;
+  final Future<void> Function() onAddCustomBasemap;
+
+  const BasemapChoices({
+    super.key,
+    required this.activeBasemap,
+    required this.onBasemapChanged,
+    required this.customBasemaps,
+    required this.onAddCustomBasemap,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return const Column(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        FilledButton.icon(
+          onPressed: onAddCustomBasemap,
+          icon: const Icon(Icons.add),
+          label: const Text('Add Custom XYZ Tiles'),
+          style: FilledButton.styleFrom(
+            backgroundColor: const Color(0xFF5D839E),
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(vertical: 12),
+          ),
+        ),
+        const SizedBox(height: 14),
         BasemapCard(
-          name: 'OpenStreetMap',
+          name: Basemap.openFreeMap.label,
           detail: 'Peta jalan',
           icon: Icons.map_outlined,
-          selected: true,
+          selected: activeBasemap == Basemap.openFreeMap,
+          onTap: () => onBasemapChanged(
+            activeBasemap == Basemap.openFreeMap ? null : Basemap.openFreeMap,
+          ),
         ),
-        SizedBox(height: 10),
-        BasemapCard(
-          name: 'Satelit',
-          detail: 'Citra satelit',
-          icon: Icons.satellite_alt_outlined,
-        ),
-        SizedBox(height: 10),
-        BasemapCard(
-          name: 'Terrain',
-          detail: 'Kontur dan relief',
-          icon: Icons.terrain_outlined,
-        ),
+        for (final basemap in customBasemaps) ...[
+          const SizedBox(height: 10),
+          BasemapCard(
+            name: basemap.label,
+            detail: basemap.detail,
+            icon: Icons.grid_on_outlined,
+            selected: activeBasemap == basemap,
+            onTap: () =>
+                onBasemapChanged(activeBasemap == basemap ? null : basemap),
+          ),
+        ],
       ],
     );
   }
@@ -408,47 +492,68 @@ class BasemapCard extends StatelessWidget {
   final String detail;
   final IconData icon;
   final bool selected;
+  final VoidCallback onTap;
 
   const BasemapCard({
     super.key,
     required this.name,
     required this.detail,
     required this.icon,
+    required this.onTap,
     this.selected = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border.all(
-          color: selected ? Colors.blueGrey : const Color(0xFFCCCCCC),
-          width: selected ? 2 : 1,
-        ),
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
         borderRadius: BorderRadius.circular(8),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, color: Colors.blueGrey),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(name, style: const TextStyle(fontWeight: FontWeight.w600)),
-                const SizedBox(height: 3),
-                Text(
-                  detail,
-                  style: const TextStyle(color: Colors.black54, fontSize: 12),
-                ),
-              ],
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            border: Border.all(
+              color: selected ? Colors.blueGrey : const Color(0xFFCCCCCC),
+              width: selected ? 2 : 1,
             ),
+            borderRadius: BorderRadius.circular(8),
           ),
-          if (selected)
-            const Icon(Icons.check_circle, color: Colors.blueGrey, size: 20),
-        ],
+          child: Row(
+            children: [
+              Icon(icon, color: Colors.blueGrey),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      name,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      detail,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.black54,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (selected)
+                const Icon(
+                  Icons.check_circle,
+                  color: Colors.blueGrey,
+                  size: 20,
+                ),
+            ],
+          ),
+        ),
       ),
     );
   }

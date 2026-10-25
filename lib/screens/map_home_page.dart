@@ -11,6 +11,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:maplibre_gl/maplibre_gl.dart' as ml;
 
+import '../models/basemap.dart';
 import '../models/imported_map.dart';
 import '../models/waypoint.dart';
 import '../services/database_helper.dart';
@@ -20,6 +21,7 @@ import '../utils/geojson_helper.dart';
 import '../views/layers_view.dart';
 import '../widgets/active_layers_overlay.dart';
 import '../widgets/crosshair.dart';
+import '../widgets/custom_xyz_tiles_sheet.dart';
 import '../widgets/gps_overlay.dart';
 import '../widgets/map_attribution.dart';
 import '../widgets/opacity_control.dart';
@@ -64,7 +66,7 @@ class _MapHomePageState extends State<MapHomePage> {
   // Konstanta ID Source dan Layer Waypoint
   static const String _waypointSourceId = 'waypoints-source';
   static const String _waypointCircleLayerId = 'waypoints-circle-layer';
-  
+
   // Konstanta ID Source dan Layer Puck (Lokasi Pengguna)
   static const String _puckSourceId = 'user-puck-source';
   static const String _puckLayerId = 'user-puck-layer';
@@ -78,6 +80,7 @@ class _MapHomePageState extends State<MapHomePage> {
   bool _gpsBusy = false;
   bool _gpsActive = false;
   List<ImportedMap> _importedMaps = [];
+  List<Basemap> _customBasemaps = [];
   bool _loadingMaps = true;
   bool _importingMap = false;
 
@@ -91,6 +94,7 @@ class _MapHomePageState extends State<MapHomePage> {
   bool _showOpacityPanel = false;
   bool _showLayersView = false;
   int _selectedLibraryTab = 0;
+  Basemap? _activeBasemap;
   double _opacity = 100;
 
   @override
@@ -103,6 +107,7 @@ class _MapHomePageState extends State<MapHomePage> {
     }
     // Muat waypoints dari database saat app dibuka
     unawaited(_loadWaypoints());
+    unawaited(_loadCustomBasemaps());
     if (!kIsWeb &&
         (defaultTargetPlatform == TargetPlatform.android ||
             defaultTargetPlatform == TargetPlatform.iOS)) {
@@ -468,6 +473,11 @@ class _MapHomePageState extends State<MapHomePage> {
               selectedTab: _selectedLibraryTab,
               onTabChanged: (tab) => setState(() => _selectedLibraryTab = tab),
               maps: _importedMaps,
+              customBasemaps: _customBasemaps,
+              activeBasemap: _activeBasemap,
+              onBasemapChanged: (basemap) =>
+                  setState(() => _activeBasemap = basemap),
+              onAddCustomBasemap: _addCustomBasemap,
               onImportMap: _importMap,
               onToggleMap: _toggleMapActive,
               onRemoveMap: _removeMap,
@@ -479,38 +489,18 @@ class _MapHomePageState extends State<MapHomePage> {
                 // 1) Peta MapLibre GL
                 if (widget.useMapLibre)
                   ml.MapLibreMap(
-                    styleString: '''{
-                      "version": 8,
-                      "sources": {
-                        "google_sat": {
-                          "type": "raster",
-                          "tiles": [
-                            "https://mt3.google.com/vt/lyrs=s&hl=en&x={x}&y={y}&z={z}"
-                          ],
-                          "tileSize": 256
-                        }
-                      },
-                      "layers": [
-                        {
-                          "id": "google_sat_layer",
-                          "type": "raster",
-                          "source": "google_sat"
-                        }
-                      ]
-                    }''',
+                    key: ValueKey(_activeBasemap),
+                    styleString:
+                        _activeBasemap?.styleString ??
+                        '{"version":8,"sources":{},"layers":[]}',
                     initialCameraPosition: ml.CameraPosition(
-                      target: ml.LatLng(
-                        _center.latitude,
-                        _center.longitude,
-                      ),
+                      target: ml.LatLng(_center.latitude, _center.longitude),
                       zoom: _zoom,
                     ),
                     trackCameraPosition: true,
                     myLocationEnabled: false,
-                    myLocationTrackingMode:
-                        ml.MyLocationTrackingMode.none,
-                    myLocationRenderMode:
-                        ml.MyLocationRenderMode.normal,
+                    myLocationTrackingMode: ml.MyLocationTrackingMode.none,
+                    myLocationRenderMode: ml.MyLocationRenderMode.normal,
                     onMapCreated: _onMapCreated,
                     onStyleLoadedCallback: _onStyleLoaded,
                     onCameraIdle: _onCameraIdle,
@@ -628,7 +618,10 @@ class _MapHomePageState extends State<MapHomePage> {
                   left: 12,
                   top: MediaQuery.of(context).padding.top + kToolbarHeight + 8,
                   child: ActiveLayersOverlay(
-                    layers: activeMaps.map((map) => map.name).toList(),
+                    layers: [
+                      ...activeMaps.map((map) => map.name),
+                      if (_activeBasemap != null) _activeBasemap!.label,
+                    ],
                     onLayerTap: _zoomToLayerByName,
                   ),
                 ),
@@ -646,11 +639,18 @@ class _MapHomePageState extends State<MapHomePage> {
                   ),
                 ),
 
-                const Positioned(left: 8, bottom: 4, child: MapAttribution()),
+                Positioned(
+                  left: 8,
+                  bottom: 4,
+                  child: MapAttribution(
+                    attribution: _activeBasemap?.attribution,
+                  ),
+                ),
 
                 if (_showToolsPopup)
                   Positioned(
-                    top: MediaQuery.of(context).padding.top + kToolbarHeight + 8,
+                    top:
+                        MediaQuery.of(context).padding.top + kToolbarHeight + 8,
                     right: 8,
                     child: ToolsPopup(
                       onClose: () => setState(() => _showToolsPopup = false),
@@ -706,6 +706,42 @@ class _MapHomePageState extends State<MapHomePage> {
       }
     } catch (e) {
       debugPrint('Gagal memuat waypoints: $e');
+    }
+  }
+
+  Future<void> _loadCustomBasemaps() async {
+    try {
+      final basemaps = await DatabaseHelper.instance.getCustomBasemaps();
+      if (!mounted) return;
+      setState(() {
+        final loadedIds = basemaps.map((basemap) => basemap.id).toSet();
+        _customBasemaps = [
+          ...basemaps,
+          ..._customBasemaps.where(
+            (basemap) => !loadedIds.contains(basemap.id),
+          ),
+        ];
+      });
+    } catch (error) {
+      if (mounted) {
+        _showMapMessage('Tidak dapat memuat custom XYZ tiles: $error');
+      }
+    }
+  }
+
+  Future<void> _addCustomBasemap() async {
+    final basemap = await showCustomXyzTilesSheet(context);
+    if (basemap == null || !mounted) return;
+
+    try {
+      await DatabaseHelper.instance.saveCustomBasemap(basemap);
+      if (!mounted) return;
+      setState(() => _customBasemaps = [..._customBasemaps, basemap]);
+      _showMapMessage('${basemap.name} ditambahkan ke daftar Basemap.');
+    } catch (error) {
+      if (mounted) {
+        _showMapMessage('Gagal menyimpan custom XYZ tiles: $error');
+      }
     }
   }
 
@@ -845,7 +881,7 @@ class _MapHomePageState extends State<MapHomePage> {
     );
     if (result == null || !mounted) return;
 
-       try {
+    try {
       if (result is WaypointSaved) {
         final waypoint = result.waypoint;
 
@@ -853,7 +889,7 @@ class _MapHomePageState extends State<MapHomePage> {
           // --- MODE TAMBAH BARU ---
           await DatabaseHelper.instance.insertWaypoint(waypoint);
           if (!mounted) return;
-          
+
           setState(() {
             _waypoints = [..._waypoints, waypoint];
           });
@@ -863,7 +899,7 @@ class _MapHomePageState extends State<MapHomePage> {
           // 1. Simpan ke database
           await DatabaseHelper.instance.updateWaypoint(waypoint);
           if (!mounted) return;
-          
+
           // 2. Perbarui state list _waypoints agar foto baru ikut tersimpan di memori
           setState(() {
             _waypoints = _waypoints.map((current) {
@@ -877,12 +913,12 @@ class _MapHomePageState extends State<MapHomePage> {
         }
       } else if (result is WaypointDeleted) {
         final waypointId = result.waypointId;
-        
+
         // --- MODE HAPUS ---
         await DatabaseHelper.instance.deleteWaypoint(waypointId);
-        
+
         // Hapus file foto fisik dari memori HP
-        final photoPaths = initialWaypoint?.photoPaths ?? []; 
+        final photoPaths = initialWaypoint?.photoPaths ?? [];
         for (final path in photoPaths) {
           try {
             final photoFile = File(path);
@@ -891,7 +927,7 @@ class _MapHomePageState extends State<MapHomePage> {
             debugPrint('Gagal menghapus file foto: $e');
           }
         }
-        
+
         if (!mounted) return;
         setState(() {
           _waypoints = _waypoints
@@ -900,10 +936,9 @@ class _MapHomePageState extends State<MapHomePage> {
         });
         _showMapMessage('Waypoint berhasil dihapus.');
       }
-      
+
       // 3. Selalu perbarui peta setelah ada perubahan (tambah/edit/hapus)
       await _updateWaypointsOnMap();
-      
     } catch (error) {
       if (mounted) {
         _showMapMessage('Gagal menyimpan perubahan waypoint: $error');
