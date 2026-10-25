@@ -1513,15 +1513,29 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
       }
 
       final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!mounted) return;
       if (!serviceEnabled) {
-        _showGpsMessage('Aktifkan layanan lokasi/GPS pada perangkat.');
+        _showGpsMessage(
+          'Aktifkan layanan lokasi/GPS pada perangkat.',
+          action: SnackBarAction(
+            label: 'Pengaturan lokasi',
+            onPressed: () => unawaited(
+              _openLocationSettings(
+                Geolocator.openLocationSettings,
+                'Tidak dapat membuka pengaturan lokasi.',
+              ),
+            ),
+          ),
+        );
         setState(() => _gpsStatus = 'GPS nonaktif');
         return;
       }
 
       var permission = await Geolocator.checkPermission();
+      if (!mounted) return;
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
+        if (!mounted) return;
       }
       if (permission == LocationPermission.denied) {
         _showGpsMessage('Izin lokasi ditolak.');
@@ -1531,6 +1545,15 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
       if (permission == LocationPermission.deniedForever) {
         _showGpsMessage(
           'Izin lokasi ditolak permanen. Aktifkan melalui pengaturan aplikasi.',
+          action: SnackBarAction(
+            label: 'Pengaturan aplikasi',
+            onPressed: () => unawaited(
+              _openLocationSettings(
+                Geolocator.openAppSettings,
+                'Tidak dapat membuka pengaturan aplikasi.',
+              ),
+            ),
+          ),
         );
         setState(() => _gpsStatus = 'Izin ditolak');
         return;
@@ -1549,6 +1572,7 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
           timeLimit: Duration(seconds: 15),
         ),
       );
+      if (!mounted) return;
       _updateGpsPosition(position);
       _moveMapToGpsPosition(position);
     } on TimeoutException {
@@ -1593,10 +1617,23 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
     return 'Sinyal lemah';
   }
 
-  void _showGpsMessage(String message) {
+  void _showGpsMessage(String message, {SnackBarAction? action}) {
     if (!mounted) return;
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
+      ..showSnackBar(SnackBar(content: Text(message), action: action));
+  }
+
+  Future<void> _openLocationSettings(
+    Future<bool> Function() openSettings,
+    String failureMessage,
+  ) async {
+    try {
+      final opened = await openSettings();
+      if (!mounted) return;
+      if (!opened) _showGpsMessage(failureMessage);
+    } catch (error) {
+      if (mounted) _showGpsMessage('$failureMessage $error');
+    }
   }
 }
