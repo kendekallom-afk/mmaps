@@ -49,6 +49,7 @@ class _MapHomePageState extends State<MapHomePage> {
   ml.MapLibreMapController? _mapController;
   bool _isStyleLoaded = false;
   bool _layersInitialized = false;
+  Future<void> _syncQueue = Future<void>.value();
 
   StreamSubscription<Position>? _positionSubscription;
   StreamSubscription<CompassEvent>? _compassSubscription;
@@ -143,6 +144,7 @@ class _MapHomePageState extends State<MapHomePage> {
     _mapController = controller;
     _isStyleLoaded = false;
     _layersInitialized = false;
+    _syncQueue = Future<void>.value();
   }
 
   /// Dipanggil otomatis setelah style JSON selesai dimuat oleh engine MapLibre
@@ -232,8 +234,20 @@ class _MapHomePageState extends State<MapHomePage> {
   }
 
   /// Menambahkan atau memperbarui GeoJSON sources & style layers di MapLibre
-  Future<void> _syncMapLayers() async {
-    if (!_isStyleLoaded || _mapController == null) return;
+  Future<void> _syncMapLayers() {
+    final sync = _syncQueue.then((_) => _syncMapLayersImpl());
+    _syncQueue = sync.catchError((Object error, StackTrace stackTrace) {
+      debugPrint('Error updating map layers: $error\n$stackTrace');
+    });
+    return _syncQueue;
+  }
+
+  Future<void> _syncMapLayersImpl() async {
+    final controller = _mapController;
+    if (!_isStyleLoaded || controller == null) return;
+
+    bool isCurrentController() =>
+        identical(_mapController, controller) && _isStyleLoaded;
 
     final activeMaps = _importedMaps.where((map) => map.isActive).toList();
     final geoJsonData = GeoJsonHelper.fromImportedMaps(activeMaps);
@@ -241,21 +255,15 @@ class _MapHomePageState extends State<MapHomePage> {
     try {
       if (!_layersInitialized) {
         // 1. Daftarkan GeoJSON Sources
-        await _mapController!.addGeoJsonSource(
-          _polySourceId,
-          geoJsonData.polygons,
-        );
-        await _mapController!.addGeoJsonSource(
-          _lineSourceId,
-          geoJsonData.lines,
-        );
-        await _mapController!.addGeoJsonSource(
-          _pointSourceId,
-          geoJsonData.points,
-        );
+        await controller.addGeoJsonSource(_polySourceId, geoJsonData.polygons);
+        if (!isCurrentController()) return;
+        await controller.addGeoJsonSource(_lineSourceId, geoJsonData.lines);
+        if (!isCurrentController()) return;
+        await controller.addGeoJsonSource(_pointSourceId, geoJsonData.points);
+        if (!isCurrentController()) return;
 
         // 2. Tambahkan Fill Layer untuk interior poligon
-        await _mapController!.addFillLayer(
+        await controller.addFillLayer(
           _polySourceId,
           _polyFillLayerId,
           const ml.FillLayerProperties(
@@ -263,9 +271,10 @@ class _MapHomePageState extends State<MapHomePage> {
             fillOpacity: ['get', 'fillOpacity'],
           ),
         );
+        if (!isCurrentController()) return;
 
         // 3. Tambahkan Line Layer untuk garis batas poligon
-        await _mapController!.addLineLayer(
+        await controller.addLineLayer(
           _polySourceId,
           _polyOutlineLayerId,
           const ml.LineLayerProperties(
@@ -273,9 +282,10 @@ class _MapHomePageState extends State<MapHomePage> {
             lineWidth: ['get', 'borderWidth'],
           ),
         );
+        if (!isCurrentController()) return;
 
         // 4. Tambahkan Line Layer untuk polyline
-        await _mapController!.addLineLayer(
+        await controller.addLineLayer(
           _lineSourceId,
           _lineLayerId,
           const ml.LineLayerProperties(
@@ -286,9 +296,10 @@ class _MapHomePageState extends State<MapHomePage> {
             lineJoin: 'round',
           ),
         );
+        if (!isCurrentController()) return;
 
         // 5. Tambahkan Circle Layer untuk titik (Marker)
-        await _mapController!.addCircleLayer(
+        await controller.addCircleLayer(
           _pointSourceId,
           _pointCircleLayerId,
           const ml.CircleLayerProperties(
@@ -299,22 +310,16 @@ class _MapHomePageState extends State<MapHomePage> {
             circleStrokeWidth: 1.5,
           ),
         );
+        if (!isCurrentController()) return;
 
         _layersInitialized = true;
       } else {
         // Jika layer sudah ada, perbarui data GeoJSON secara instan
-        await _mapController!.setGeoJsonSource(
-          _polySourceId,
-          geoJsonData.polygons,
-        );
-        await _mapController!.setGeoJsonSource(
-          _lineSourceId,
-          geoJsonData.lines,
-        );
-        await _mapController!.setGeoJsonSource(
-          _pointSourceId,
-          geoJsonData.points,
-        );
+        await controller.setGeoJsonSource(_polySourceId, geoJsonData.polygons);
+        if (!isCurrentController()) return;
+        await controller.setGeoJsonSource(_lineSourceId, geoJsonData.lines);
+        if (!isCurrentController()) return;
+        await controller.setGeoJsonSource(_pointSourceId, geoJsonData.points);
       }
     } catch (e) {
       debugPrint('Error updating map layers: $e');
