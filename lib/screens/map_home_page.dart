@@ -99,6 +99,7 @@ class _MapHomePageState extends State<MapHomePage> {
   int _selectedLibraryTab = 0;
   Basemap? _activeBasemap;
   double _opacity = 100;
+  Timer? _opacityUpdateTimer;
 
   @override
   void initState() {
@@ -132,6 +133,7 @@ class _MapHomePageState extends State<MapHomePage> {
   void dispose() {
     unawaited(_positionSubscription?.cancel());
     unawaited(_compassSubscription?.cancel());
+    _opacityUpdateTimer?.cancel();
     _mapController?.dispose();
     super.dispose();
   }
@@ -154,6 +156,7 @@ class _MapHomePageState extends State<MapHomePage> {
 
     // 1. Sinkronisasi layer KML
     await _syncMapLayers();
+    await _applyKmlLayerOpacity();
 
     // 2. Tambahkan gambar puck
     try {
@@ -266,9 +269,17 @@ class _MapHomePageState extends State<MapHomePage> {
         await controller.addFillLayer(
           _polySourceId,
           _polyFillLayerId,
-          const ml.FillLayerProperties(
+          ml.FillLayerProperties(
             fillColor: ['get', 'fillColor'],
-            fillOpacity: ['get', 'fillOpacity'],
+            fillOpacity: [
+              '*',
+              [
+                'coalesce',
+                ['get', 'fillOpacity'],
+                1,
+              ],
+              _opacity / 100,
+            ],
           ),
         );
         if (!isCurrentController()) return;
@@ -277,9 +288,18 @@ class _MapHomePageState extends State<MapHomePage> {
         await controller.addLineLayer(
           _polySourceId,
           _polyOutlineLayerId,
-          const ml.LineLayerProperties(
+          ml.LineLayerProperties(
             lineColor: ['get', 'borderColor'],
             lineWidth: ['get', 'borderWidth'],
+            lineOpacity: [
+              '*',
+              [
+                'coalesce',
+                ['get', 'borderOpacity'],
+                1,
+              ],
+              _opacity / 100,
+            ],
           ),
         );
         if (!isCurrentController()) return;
@@ -288,10 +308,18 @@ class _MapHomePageState extends State<MapHomePage> {
         await controller.addLineLayer(
           _lineSourceId,
           _lineLayerId,
-          const ml.LineLayerProperties(
+          ml.LineLayerProperties(
             lineColor: ['get', 'color'],
             lineWidth: ['get', 'width'],
-            lineOpacity: ['get', 'opacity'],
+            lineOpacity: [
+              '*',
+              [
+                'coalesce',
+                ['get', 'opacity'],
+                1,
+              ],
+              _opacity / 100,
+            ],
             lineCap: 'round',
             lineJoin: 'round',
           ),
@@ -302,12 +330,21 @@ class _MapHomePageState extends State<MapHomePage> {
         await controller.addCircleLayer(
           _pointSourceId,
           _pointCircleLayerId,
-          const ml.CircleLayerProperties(
+          ml.CircleLayerProperties(
             circleColor: ['get', 'color'],
             circleRadius: ['get', 'radius'],
-            circleOpacity: ['get', 'opacity'],
+            circleOpacity: [
+              '*',
+              [
+                'coalesce',
+                ['get', 'opacity'],
+                1,
+              ],
+              _opacity / 100,
+            ],
             circleStrokeColor: '#FFFFFF',
             circleStrokeWidth: 1.5,
+            circleStrokeOpacity: _opacity / 100,
           ),
         );
         if (!isCurrentController()) return;
@@ -324,6 +361,97 @@ class _MapHomePageState extends State<MapHomePage> {
     } catch (e) {
       debugPrint('Error updating map layers: $e');
     }
+  }
+
+  Future<void> _applyKmlLayerOpacity() async {
+    final controller = _mapController;
+    if (!_isStyleLoaded || !_layersInitialized || controller == null) return;
+
+    final factor = _opacity / 100;
+    try {
+      await controller.setLayerProperties(
+        _polyFillLayerId,
+        ml.FillLayerProperties(
+          fillColor: ['get', 'fillColor'],
+          fillOpacity: [
+            '*',
+            [
+              'coalesce',
+              ['get', 'fillOpacity'],
+              1,
+            ],
+            factor,
+          ],
+        ),
+      );
+      if (!identical(_mapController, controller) || !_isStyleLoaded) return;
+      await controller.setLayerProperties(
+        _polyOutlineLayerId,
+        ml.LineLayerProperties(
+          lineColor: ['get', 'borderColor'],
+          lineWidth: ['get', 'borderWidth'],
+          lineOpacity: [
+            '*',
+            [
+              'coalesce',
+              ['get', 'borderOpacity'],
+              1,
+            ],
+            factor,
+          ],
+        ),
+      );
+      if (!identical(_mapController, controller) || !_isStyleLoaded) return;
+      await controller.setLayerProperties(
+        _lineLayerId,
+        ml.LineLayerProperties(
+          lineColor: ['get', 'color'],
+          lineWidth: ['get', 'width'],
+          lineOpacity: [
+            '*',
+            [
+              'coalesce',
+              ['get', 'opacity'],
+              1,
+            ],
+            factor,
+          ],
+          lineCap: 'round',
+          lineJoin: 'round',
+        ),
+      );
+      if (!identical(_mapController, controller) || !_isStyleLoaded) return;
+      await controller.setLayerProperties(
+        _pointCircleLayerId,
+        ml.CircleLayerProperties(
+          circleColor: ['get', 'color'],
+          circleRadius: ['get', 'radius'],
+          circleOpacity: [
+            '*',
+            [
+              'coalesce',
+              ['get', 'opacity'],
+              1,
+            ],
+            factor,
+          ],
+          circleStrokeColor: '#FFFFFF',
+          circleStrokeWidth: 1.5,
+          circleStrokeOpacity: factor,
+        ),
+      );
+    } catch (error) {
+      debugPrint('Gagal memperbarui transparansi layer peta: $error');
+    }
+  }
+
+  void _scheduleKmlLayerOpacityUpdate(double value) {
+    setState(() => _opacity = value);
+    _opacityUpdateTimer?.cancel();
+    _opacityUpdateTimer = Timer(
+      const Duration(milliseconds: 80),
+      () => unawaited(_applyKmlLayerOpacity()),
+    );
   }
 
   // ==========================================
@@ -635,7 +763,7 @@ class _MapHomePageState extends State<MapHomePage> {
                       onToggle: () => setState(
                         () => _showOpacityPanel = !_showOpacityPanel,
                       ),
-                      onChanged: (v) => setState(() => _opacity = v),
+                      onChanged: _scheduleKmlLayerOpacityUpdate,
                     ),
                   ),
 
