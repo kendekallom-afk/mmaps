@@ -263,32 +263,40 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
   }
 
   /// Dipanggil otomatis setelah style JSON selesai dimuat oleh engine MapLibre
-  void _onStyleLoaded() async {
+  void _onStyleLoaded() {
+    unawaited(_initializeMapStyle());
+  }
+
+  Future<void> _initializeMapStyle() async {
+    final controller = _mapController;
+    if (controller == null) return;
+
     _isStyleLoaded = true;
     _layersInitialized = false;
 
-    // 1. Sinkronisasi layer KML
-    await _syncMapLayers();
-    await _applyKmlLayerOpacity();
-
-    // 2. Tambahkan gambar puck
     try {
+      // 1. Sinkronisasi layer KML
+      await _syncMapLayers();
+      if (!_isCurrentStyleController(controller)) return;
+      await _applyKmlLayerOpacity();
+      if (!_isCurrentStyleController(controller)) return;
+
+      // 2. Tambahkan gambar puck
       final ByteData data = await rootBundle.load(
         'assets/images/location_puck.png',
       );
+      if (!_isCurrentStyleController(controller)) return;
       final Uint8List bytes = data.buffer.asUint8List();
-      await _mapController!.addImage('puck-icon', bytes);
-    } catch (e) {
-      debugPrint('Image puck-icon gagal dimuat atau sudah ada: $e');
-    }
+      await controller.addImage('puck-icon', bytes);
+      if (!_isCurrentStyleController(controller)) return;
 
-    // 3. Tambahkan source dan layer puck
-    try {
-      await _mapController!.addGeoJsonSource(_puckSourceId, {
+      // 3. Tambahkan source dan layer puck
+      await controller.addGeoJsonSource(_puckSourceId, {
         "type": "FeatureCollection",
         "features": [],
       });
-      await _mapController!.addSymbolLayer(
+      if (!_isCurrentStyleController(controller)) return;
+      await controller.addSymbolLayer(
         _puckSourceId,
         _puckLayerId,
         const ml.SymbolLayerProperties(
@@ -299,21 +307,20 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
           iconIgnorePlacement: true,
         ),
       );
-    } catch (e) {
-      debugPrint('Gagal menambahkan layer puck: $e');
-    }
+      if (!_isCurrentStyleController(controller)) return;
 
-    // 4. Update posisi puck setelah sourcenya tersedia.
-    await _updateUserPuck();
+      // 4. Update posisi puck setelah sourcenya tersedia.
+      await _updateUserPuck();
+      if (!_isCurrentStyleController(controller)) return;
 
-    // 5. Tambahkan source dan layer untuk waypoints
-    try {
-      await _mapController!.addGeoJsonSource(
+      // 5. Tambahkan source dan layer untuk waypoints
+      await controller.addGeoJsonSource(
         _waypointSourceId,
         _buildWaypointsGeoJson([]),
       );
+      if (!_isCurrentStyleController(controller)) return;
       // Circle merah bertepi putih sebagai marker waypoint
-      await _mapController!.addCircleLayer(
+      await controller.addCircleLayer(
         _waypointSourceId,
         _waypointCircleLayerId,
         const ml.CircleLayerProperties(
@@ -324,21 +331,30 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
           circleStrokeWidth: 2.0,
         ),
       );
-    } catch (e) {
-      debugPrint('Gagal menambahkan layer waypoints: $e');
-    }
+      if (!_isCurrentStyleController(controller)) return;
 
-    // 6. Render waypoints yang sudah ada ke peta
-    if (_waypoints.isNotEmpty) {
-      await _updateWaypointsOnMap();
-    }
+      // 6. Render waypoints yang sudah ada ke peta
+      if (_waypoints.isNotEmpty) {
+        await _updateWaypointsOnMap();
+        if (!_isCurrentStyleController(controller)) return;
+      }
 
-    // 7. Fit kamera ke peta yang aktif
-    final activeMaps = _importedMaps.where((map) => map.isActive);
-    if (!_showLayersView && activeMaps.isNotEmpty) {
-      _fitMapToImportedMaps(activeMaps);
+      // 7. Fit kamera ke peta yang aktif
+      final activeMaps = _importedMaps.where((map) => map.isActive);
+      if (!_showLayersView && activeMaps.isNotEmpty) {
+        _fitMapToImportedMaps(activeMaps);
+      }
+    } catch (error, stackTrace) {
+      if (_isCurrentStyleController(controller)) {
+        _isStyleLoaded = false;
+        _layersInitialized = false;
+      }
+      debugPrint('Gagal menginisialisasi style peta: $error\n$stackTrace');
     }
   }
+
+  bool _isCurrentStyleController(ml.MapLibreMapController controller) =>
+      identical(_mapController, controller) && _isStyleLoaded;
 
   void _zoomToLayerByName(String layerName) {
     for (final map in _importedMaps) {
