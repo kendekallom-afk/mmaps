@@ -75,9 +75,12 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
 
   // State peta
   LatLng _center = const LatLng(-2.67, 118.89);
+  late final ValueNotifier<LatLng> _coordinateNotifier;
   double _zoom = 12;
   Position? _gpsPosition;
-  double? _compassHeading;
+  final ValueNotifier<double?> _compassHeading = ValueNotifier(null);
+  DateTime? _lastCompassUpdate;
+  DateTime? _lastCoordinateUpdate;
   String _gpsStatus = 'GPS mati';
   bool _gpsBusy = false;
   bool _gpsActive = false;
@@ -105,6 +108,7 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    _coordinateNotifier = ValueNotifier(_center);
     WidgetsBinding.instance.addObserver(this);
     if (widget.loadSavedLibrary) {
       unawaited(_loadMapLibrary());
@@ -123,6 +127,8 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
     unawaited(_compassSubscription?.cancel());
     _positionSubscription = null;
     _compassSubscription = null;
+    _coordinateNotifier.dispose();
+    _compassHeading.dispose();
     _opacityUpdateTimer?.cancel();
     _mapController?.dispose();
     super.dispose();
@@ -187,15 +193,37 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
 
     _compassSubscription = FlutterCompass.events?.listen(
       (event) {
-        if (!mounted) return;
-        setState(() => _compassHeading = event.heading);
-        unawaited(_updateUserPuck());
+        _updateCompassHeading(event.heading);
       },
       onError: (Object error) {
         if (!mounted) return;
-        setState(() => _compassHeading = null);
+        _lastCompassUpdate = null;
+        _compassHeading.value = null;
+        unawaited(_updateUserPuck());
       },
     );
+  }
+
+  void _updateCompassHeading(double? heading) {
+    if (!mounted) return;
+    final previous = _compassHeading.value;
+    if (heading == null) {
+      if (previous == null) return;
+    } else if (previous != null) {
+      final difference = (heading - previous).abs() % 360;
+      if (math.min(difference, 360 - difference) <= 2) return;
+    }
+
+    final now = DateTime.now();
+    if (_lastCompassUpdate != null &&
+        now.difference(_lastCompassUpdate!) <
+            const Duration(milliseconds: 100)) {
+      return;
+    }
+
+    _lastCompassUpdate = now;
+    _compassHeading.value = heading;
+    unawaited(_updateUserPuck());
   }
 
   Future<void> _stopGps() async {
@@ -204,9 +232,10 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
     setState(() {
       _gpsActive = false;
       _gpsPosition = null;
-      _compassHeading = null;
       _gpsStatus = 'GPS mati';
     });
+    _compassHeading.value = null;
+    _lastCompassUpdate = null;
     _resumeGpsOnForeground = false;
     await _cancelGpsStreams();
 
@@ -559,7 +588,7 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
 
     final lat = _gpsPosition!.latitude;
     final lon = _gpsPosition!.longitude;
-    final heading = _compassHeading ?? 0.0;
+    final heading = _compassHeading.value ?? 0.0;
 
     try {
       await _mapController!.setGeoJsonSource(_puckSourceId, {
@@ -590,16 +619,24 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
 
     final newCenter = LatLng(camera.target.latitude, camera.target.longitude);
     final newZoom = camera.zoom;
-
-    if (_center.latitude != newCenter.latitude ||
-        _center.longitude != newCenter.longitude ||
-        _zoom != newZoom) {
-      setState(() {
-        _center = newCenter;
-        _zoom = newZoom;
-      });
-    }
+    _center = newCenter;
+    _zoom = newZoom;
+    _coordinateNotifier.value = newCenter;
     unawaited(_updateSelectedWaypointPosition());
+  }
+
+  void _onCameraMove(ml.CameraPosition camera) {
+    final now = DateTime.now();
+    if (_lastCoordinateUpdate != null &&
+        now.difference(_lastCoordinateUpdate!) <
+            const Duration(milliseconds: 100)) {
+      return;
+    }
+    _lastCoordinateUpdate = now;
+    _coordinateNotifier.value = LatLng(
+      camera.target.latitude,
+      camera.target.longitude,
+    );
   }
 
   // ==========================================
@@ -634,15 +671,18 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
             ),
             Expanded(
               child: Center(
-                child: Text(
-                  'Lat: ${_center.latitude.toStringAsFixed(6)}\n'
-                  'Lon: ${_center.longitude.toStringAsFixed(6)}',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 13,
-                    height: 1.3,
-                    color: Colors.white,
+                child: ValueListenableBuilder<LatLng>(
+                  valueListenable: _coordinateNotifier,
+                  builder: (context, coordinates, _) => Text(
+                    'Lat: ${coordinates.latitude.toStringAsFixed(6)}\n'
+                    'Lon: ${coordinates.longitude.toStringAsFixed(6)}',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 13,
+                      height: 1.3,
+                      color: Colors.white,
+                    ),
                   ),
                 ),
               ),
@@ -714,6 +754,7 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
                       onMapCreated: _onMapCreated,
                       onStyleLoadedCallback: _onStyleLoaded,
                       onCameraIdle: _onCameraIdle,
+                      onCameraMove: _onCameraMove,
 
                       // Aktifkan klik peta ketika marker ditekan.
                       featureTapsTriggersMapClick: true,
@@ -814,13 +855,16 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
                   Positioned(
                     right: 12,
                     bottom: 12,
-                    child: GpsOverlay(
-                      onTap: _centerOnGps,
-                      onLongPress: _stopGps,
-                      status: _gpsStatus,
-                      accuracy: _gpsPosition?.accuracy,
-                      heading: _compassHeading,
-                      loading: _gpsBusy,
+                    child: ValueListenableBuilder<double?>(
+                      valueListenable: _compassHeading,
+                      builder: (context, heading, _) => GpsOverlay(
+                        onTap: _centerOnGps,
+                        onLongPress: _stopGps,
+                        status: _gpsStatus,
+                        accuracy: _gpsPosition?.accuracy,
+                        heading: heading,
+                        loading: _gpsBusy,
+                      ),
                     ),
                   ),
 
