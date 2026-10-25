@@ -1338,7 +1338,17 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
   Future<void> _toggleMapActive(ImportedMap map) async {
     if (_busyMapIds.contains(map.id)) return;
     final activate = !map.isActive;
-    ImportedMap targetMap = map;
+    ImportedMap targetMap = activate
+        ? map
+        : ImportedMap(
+            id: map.id,
+            name: map.name,
+            fileName: map.fileName,
+            points: const [],
+            lines: const [],
+            polygons: const [],
+            overlays: const [],
+          );
 
     if (activate) {
       final isLazyPlaceholder =
