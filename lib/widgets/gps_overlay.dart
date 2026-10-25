@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 class GpsOverlay extends StatelessWidget {
   final VoidCallback onTap;
+  final VoidCallback? onLongPress;
   final String status;
   final double? accuracy;
   final double? heading;
@@ -12,6 +13,7 @@ class GpsOverlay extends StatelessWidget {
   const GpsOverlay({
     super.key,
     required this.onTap,
+    this.onLongPress,
     required this.status,
     required this.accuracy,
     required this.heading,
@@ -22,6 +24,7 @@ class GpsOverlay extends StatelessWidget {
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: onTap,
+      onLongPress: onLongPress,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         decoration: BoxDecoration(

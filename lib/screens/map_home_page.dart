@@ -42,7 +42,7 @@ class MapHomePage extends StatefulWidget {
   State<MapHomePage> createState() => _MapHomePageState();
 }
 
-class _MapHomePageState extends State<MapHomePage> {
+class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
   static const int _maxImportBytes = 100 * 1024 * 1024;
 
   // Controller MapLibre & status pemuatan
@@ -81,6 +81,7 @@ class _MapHomePageState extends State<MapHomePage> {
   String _gpsStatus = 'GPS mati';
   bool _gpsBusy = false;
   bool _gpsActive = false;
+  bool _resumeGpsOnForeground = false;
   List<ImportedMap> _importedMaps = [];
   List<Basemap> _customBasemaps = [];
   bool _loadingMaps = true;
@@ -104,6 +105,7 @@ class _MapHomePageState extends State<MapHomePage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     if (widget.loadSavedLibrary) {
       unawaited(_loadMapLibrary());
     } else {
@@ -112,30 +114,112 @@ class _MapHomePageState extends State<MapHomePage> {
     // Muat waypoints dari database saat app dibuka
     unawaited(_loadWaypoints());
     unawaited(_loadCustomBasemaps());
-    if (!kIsWeb &&
-        (defaultTargetPlatform == TargetPlatform.android ||
-            defaultTargetPlatform == TargetPlatform.iOS)) {
-      _compassSubscription = FlutterCompass.events?.listen(
-        (event) {
-          if (!mounted) return;
-          setState(() => _compassHeading = event.heading);
-          unawaited(_updateUserPuck());
-        },
-        onError: (Object error) {
-          if (!mounted) return;
-          setState(() => _compassHeading = null);
-        },
-      );
-    }
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     unawaited(_positionSubscription?.cancel());
     unawaited(_compassSubscription?.cancel());
+    _positionSubscription = null;
+    _compassSubscription = null;
     _opacityUpdateTimer?.cancel();
     _mapController?.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused) {
+      _resumeGpsOnForeground = _gpsActive;
+      unawaited(_cancelGpsStreams());
+    } else if (state == AppLifecycleState.resumed) {
+      final shouldResume = _resumeGpsOnForeground && _gpsActive;
+      _resumeGpsOnForeground = false;
+      if (shouldResume) {
+        _startPositionSubscription();
+        _startCompassSubscription();
+      }
+    }
+  }
+
+  Future<void> _cancelGpsStreams() async {
+    final positionSubscription = _positionSubscription;
+    final compassSubscription = _compassSubscription;
+    _positionSubscription = null;
+    _compassSubscription = null;
+
+    for (final subscription in [positionSubscription, compassSubscription]) {
+      if (subscription == null) continue;
+      try {
+        await subscription.cancel();
+      } catch (error) {
+        debugPrint('Gagal menghentikan stream GPS/kompas: $error');
+      }
+    }
+  }
+
+  void _startPositionSubscription() {
+    if (_positionSubscription != null) return;
+    _positionSubscription =
+        Geolocator.getPositionStream(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.bestForNavigation,
+            distanceFilter: 3,
+          ),
+        ).listen(
+          _updateGpsPosition,
+          onError: (Object error) {
+            if (!mounted) return;
+            setState(() => _gpsStatus = 'GPS bermasalah');
+            _showGpsMessage('Gagal menerima pembaruan lokasi: $error');
+          },
+        );
+  }
+
+  void _startCompassSubscription() {
+    if (kIsWeb ||
+        _compassSubscription != null ||
+        (defaultTargetPlatform != TargetPlatform.android &&
+            defaultTargetPlatform != TargetPlatform.iOS)) {
+      return;
+    }
+
+    _compassSubscription = FlutterCompass.events?.listen(
+      (event) {
+        if (!mounted) return;
+        setState(() => _compassHeading = event.heading);
+        unawaited(_updateUserPuck());
+      },
+      onError: (Object error) {
+        if (!mounted) return;
+        setState(() => _compassHeading = null);
+      },
+    );
+  }
+
+  Future<void> _stopGps() async {
+    if (!_gpsActive && _positionSubscription == null) return;
+
+    setState(() {
+      _gpsActive = false;
+      _gpsPosition = null;
+      _compassHeading = null;
+      _gpsStatus = 'GPS mati';
+    });
+    _resumeGpsOnForeground = false;
+    await _cancelGpsStreams();
+
+    final controller = _mapController;
+    if (controller == null || !_isStyleLoaded) return;
+    try {
+      await controller.setGeoJsonSource(_puckSourceId, {
+        'type': 'FeatureCollection',
+        'features': [],
+      });
+    } catch (error) {
+      debugPrint('Gagal menghapus puck GPS dari peta: $error');
+    }
   }
 
   // ==========================================
@@ -732,6 +816,7 @@ class _MapHomePageState extends State<MapHomePage> {
                     bottom: 12,
                     child: GpsOverlay(
                       onTap: _centerOnGps,
+                      onLongPress: _stopGps,
                       status: _gpsStatus,
                       accuracy: _gpsPosition?.accuracy,
                       heading: _compassHeading,
@@ -1445,20 +1530,8 @@ class _MapHomePageState extends State<MapHomePage> {
         _gpsActive = true;
         _gpsStatus = 'Mencari sinyal';
       });
-      _positionSubscription ??=
-          Geolocator.getPositionStream(
-            locationSettings: const LocationSettings(
-              accuracy: LocationAccuracy.bestForNavigation,
-              distanceFilter: 3,
-            ),
-          ).listen(
-            _updateGpsPosition,
-            onError: (Object error) {
-              if (!mounted) return;
-              setState(() => _gpsStatus = 'GPS bermasalah');
-              _showGpsMessage('Gagal menerima pembaruan lokasi: $error');
-            },
-          );
+      _startPositionSubscription();
+      _startCompassSubscription();
 
       final position = await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
