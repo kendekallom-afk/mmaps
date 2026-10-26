@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
+import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
@@ -9,6 +10,7 @@ import 'package:xml/xml.dart';
 
 import '../models/imported_map.dart';
 
+/// Fungsi top-level agar bisa dipakai dengan `compute(...)` (isolate).
 ImportedMap parseKmlInBackground(
   ({String id, String fileName, Uint8List bytes}) input,
 ) {
@@ -20,60 +22,89 @@ ImportedMap parseKmlInBackground(
 }
 
 class KmlImportService {
-  static const int maxDocumentBytes = 50 * 1024 * 1024;
+  /// Batas ukuran file mentah (KML/KMZ). Samakan dengan batas di layar impor.
+  static const int maxInputBytes = 100 * 1024 * 1024;
+
+  /// Batas ukuran dokumen KML (setelah KMZ diekstrak).
+  /// Parser XML membangun DOM penuh di memori yang bisa belasan kali lipat
+  /// dari ukuran teksnya, jadi angka ini sengaja dibuat konservatif.
+  /// Naikkan hanya setelah diuji di perangkat Android kelas menengah.
+  static const int maxDocumentBytes = 20 * 1024 * 1024;
+
+  /// Batas satu gambar overlay dan total semua gambar overlay.
   static const int maxOverlayBytes = 80 * 1024 * 1024;
+  static const int maxTotalOverlayBytes = 240 * 1024 * 1024;
 
   ImportedMap parse({
     required String id,
     required String fileName,
     required Uint8List bytes,
   }) {
-    // Mengukur waktu pemrosesan KMZ/KML.
     final stopwatch = Stopwatch()..start();
 
-    final extension = fileName.split('.').last.toLowerCase();
+    final extension = fileName.contains('.')
+        ? fileName.split('.').last.toLowerCase()
+        : '';
 
     if (extension != 'kml' && extension != 'kmz') {
       throw const FormatException('Pilih file dengan format .kml atau .kmz.');
     }
 
-    if (bytes.length > 500 * 1024 * 1024) {
-      throw const FormatException('Ukuran file melebihi batas 500 MB.');
+    if (bytes.length > maxInputBytes) {
+      throw FormatException(
+        'Ukuran file melebihi batas ${_mb(maxInputBytes)} MB.',
+      );
     }
 
-    final documentData = extension == 'kmz'
+    final source = extension == 'kmz'
         ? _readKmz(bytes)
         : _KmlSource(bytes: bytes, assets: const {}, baseDirectory: '');
 
-    if (documentData.bytes.length > maxDocumentBytes) {
-      throw const FormatException('Ukuran dokumen KML melebihi batas 50 MB.');
+    if (source.bytes.length > maxDocumentBytes) {
+      throw FormatException(
+        'Ukuran dokumen KML melebihi batas ${_mb(maxDocumentBytes)} MB.',
+      );
     }
 
-    final xml = XmlDocument.parse(utf8.decode(documentData.bytes));
+    final xml = _parseXml(source.bytes);
+
+    // Satu kali penelusuran DOM untuk mengumpulkan semua elemen yang relevan.
+    final styleElements = <XmlElement>[];
+    final styleMapElements = <XmlElement>[];
+    final placemarks = <XmlElement>[];
+    final groundOverlays = <XmlElement>[];
+
+    for (final element in xml.descendantElements) {
+      switch (element.localName) {
+        case 'Style':
+          if (element.getAttribute('id') != null) styleElements.add(element);
+        case 'StyleMap':
+          if (element.getAttribute('id') != null) styleMapElements.add(element);
+        case 'Placemark':
+          placemarks.add(element);
+        case 'GroundOverlay':
+          groundOverlays.add(element);
+      }
+    }
+
+    // Style global, lalu StyleMap (yang merujuk ke Style).
+    final styles = <String, _KmlStyle>{};
+    for (final style in styleElements) {
+      styles[style.getAttribute('id')!] = _parseStyleElement(style);
+    }
+    _registerStyleMaps(styleMapElements, styles);
 
     final pointFeatures = <MapPointFeature>[];
     final lineFeatures = <MapLineFeature>[];
     final polygonFeatures = <MapPolygonFeature>[];
     final rasterOverlays = <MapRasterOverlay>[];
 
-    var totalOverlayBytes = 0;
-
-    // Mengambil definisi Style global.
-    final styleMap = <String, _KmlStyle>{};
-
-    for (final style in xml.descendantElements.where(
-      (e) => e.localName == 'Style' && e.getAttribute('id') != null,
-    )) {
-      final styleId = style.getAttribute('id')!;
-      styleMap[styleId] = _parseStyleElement(style);
-    }
-
-    // Memproses Placemark dan geometri KML.
-    for (final placemark in xml.descendantElements.where(
-      (element) => element.localName == 'Placemark',
-    )) {
-      final name = _childText(placemark, 'name') ?? 'Placemark';
-      final style = _resolveStyle(placemark, styleMap);
+    // ==========================================
+    // PLACEMARK & GEOMETRI
+    // ==========================================
+    for (final placemark in placemarks) {
+      final name = _nonEmpty(_childText(placemark, 'name')) ?? 'Placemark';
+      final style = _resolveStyle(placemark, styles);
 
       for (final geometry in placemark.descendantElements.where(
         (element) => const {
@@ -85,7 +116,6 @@ class KmlImportService {
         switch (geometry.localName) {
           case 'Point':
             final coordinates = _coordinates(geometry);
-
             if (coordinates.isNotEmpty) {
               pointFeatures.add(
                 MapPointFeature(
@@ -98,7 +128,6 @@ class KmlImportService {
 
           case 'LineString':
             final coordinates = _coordinates(geometry);
-
             if (coordinates.length >= 2) {
               lineFeatures.add(
                 MapLineFeature(
@@ -112,7 +141,6 @@ class KmlImportService {
 
           case 'Polygon':
             final outer = _firstDescendant(geometry, 'outerBoundaryIs');
-
             final outerPoints = outer == null
                 ? <LatLng>[]
                 : _coordinates(outer);
@@ -124,13 +152,20 @@ class KmlImportService {
                   .where((ring) => ring.length >= 3)
                   .toList();
 
-              final baseFill = style.polyColor ?? Colors.blue;
+              // <fill>0</fill> => tanpa isian. Tanpa <color> => isian biru tipis.
+              final Color fillColor;
+              if (!style.fillEnabled) {
+                fillColor = Colors.transparent;
+              } else if (style.polyColor != null) {
+                fillColor = style.polyColor!;
+              } else {
+                fillColor = Colors.blue.withValues(alpha: 0.18);
+              }
 
-              final fillColor = style.hasPolyColor
-                  ? baseFill.withValues(
-                      alpha: baseFill.a * style.polyFillOpacity,
-                    )
-                  : Colors.blue.withValues(alpha: 0.18);
+              // <outline>0</outline> => tanpa garis tepi.
+              final borderColor = style.outlineEnabled
+                  ? (style.lineColor ?? Colors.blue)
+                  : Colors.transparent;
 
               polygonFeatures.add(
                 MapPolygonFeature(
@@ -138,7 +173,7 @@ class KmlImportService {
                   points: outerPoints,
                   holes: holes,
                   fillColor: fillColor,
-                  borderColor: style.lineColor ?? Colors.blue,
+                  borderColor: borderColor,
                 ),
               );
             }
@@ -146,44 +181,64 @@ class KmlImportService {
       }
     }
 
-    // Memproses GroundOverlay.
-    for (final groundOverlay in xml.descendantElements.where(
-      (element) => element.localName == 'GroundOverlay',
-    )) {
+    // ==========================================
+    // GROUND OVERLAY (gambar bergeoreferensi)
+    // Catatan: atribut <rotation> pada LatLonBox dan gx:LatLonQuad
+    // belum didukung, jadi overlay yang diputar akan salah posisi.
+    // ==========================================
+    var totalOverlayBytes = 0;
+
+    for (final groundOverlay in groundOverlays) {
       final icon = _firstDescendant(groundOverlay, 'Icon');
-      final href = icon == null ? null : _childText(icon, 'href');
+      final href = _nonEmpty(icon == null ? null : _childText(icon, 'href'));
       final box = _firstDescendant(groundOverlay, 'LatLonBox');
 
       if (href == null || box == null) continue;
 
+      // Gambar dari internet tidak diambil (harus ada di dalam KMZ).
+      final lowerHref = href.toLowerCase();
+      if (lowerHref.startsWith('http://') || lowerHref.startsWith('https://')) {
+        continue;
+      }
+
       final bounds = _overlayBounds(box);
       if (bounds == null) continue;
 
-      final assetPath = _normalizeArchivePath(
-        '${documentData.baseDirectory}$href',
-      );
-
-      final assetFile = documentData.assets[assetPath.toLowerCase()];
+      final decodedHref = _safeDecode(href);
+      final assetFile =
+          source.assets[_normalizeArchivePath(
+            '${source.baseDirectory}$decodedHref',
+          ).toLowerCase()] ??
+          source.assets[_normalizeArchivePath(decodedHref).toLowerCase()];
       if (assetFile == null) continue;
 
       if (assetFile.size > maxOverlayBytes) {
-        throw FormatException('Gambar overlay "$href" melebihi batas 80 MB.');
-      }
-
-      totalOverlayBytes += assetFile.size;
-
-      if (totalOverlayBytes > 240 * 1024 * 1024) {
-        throw const FormatException(
-          'Total ukuran gambar overlay KMZ melebihi batas 240 MB.',
+        throw FormatException(
+          'Gambar overlay "$href" melebihi batas ${_mb(maxOverlayBytes)} MB.',
         );
       }
 
       final imageBytes = assetFile.readBytes();
       if (imageBytes == null) continue;
 
+      // Periksa ukuran sebenarnya setelah dekompresi (header ZIP bisa tidak jujur).
+      if (imageBytes.length > maxOverlayBytes) {
+        throw FormatException(
+          'Gambar overlay "$href" melebihi batas ${_mb(maxOverlayBytes)} MB.',
+        );
+      }
+
+      totalOverlayBytes += imageBytes.length;
+      if (totalOverlayBytes > maxTotalOverlayBytes) {
+        throw FormatException(
+          'Total ukuran gambar overlay KMZ melebihi batas '
+          '${_mb(maxTotalOverlayBytes)} MB.',
+        );
+      }
+
       rasterOverlays.add(
         MapRasterOverlay(
-          name: _childText(groundOverlay, 'name') ?? href,
+          name: _nonEmpty(_childText(groundOverlay, 'name')) ?? href,
           bytes: imageBytes,
           bounds: bounds,
         ),
@@ -199,43 +254,36 @@ class KmlImportService {
       );
     }
 
-    // Menghitung jumlah koordinat tanpa membuat daftar koordinat baru.
-    final lineCoordinateCount = lineFeatures.fold<int>(
-      0,
-      (total, feature) => total + feature.points.length,
-    );
-
-    final polygonCoordinateCount = polygonFeatures.fold<int>(
-      0,
-      (total, feature) =>
-          total +
-          feature.points.length +
-          feature.holes.fold<int>(
-            0,
-            (holeTotal, ring) => holeTotal + ring.length,
-          ),
-    );
-
-    final totalCoordinates = lineCoordinateCount + polygonCoordinateCount;
-
     stopwatch.stop();
 
-    // Catatan ini dapat dilihat melalui Debug Console/terminal.
-    debugPrint(
-      '[KMZ PERF] $fileName | '
-      'ukuran: ${(bytes.length / (1024 * 1024)).toStringAsFixed(2)} MB | '
-      'parse: ${stopwatch.elapsedMilliseconds} ms | '
-      'titik: ${pointFeatures.length} | '
-      'garis: ${lineFeatures.length} | '
-      'poligon: ${polygonFeatures.length} | '
-      'koordinat: $totalCoordinates | '
-      'overlay: ${rasterOverlays.length}',
-    );
+    if (kDebugMode) {
+      final lineCoordinateCount = lineFeatures.fold<int>(
+        0,
+        (total, feature) => total + feature.points.length,
+      );
+      final polygonCoordinateCount = polygonFeatures.fold<int>(
+        0,
+        (total, feature) =>
+            total +
+            feature.points.length +
+            feature.holes.fold<int>(0, (sum, ring) => sum + ring.length),
+      );
+      debugPrint(
+        '[KMZ PERF] $fileName | '
+        'ukuran: ${(bytes.length / (1024 * 1024)).toStringAsFixed(2)} MB | '
+        'parse: ${stopwatch.elapsedMilliseconds} ms | '
+        'titik: ${pointFeatures.length} | '
+        'garis: ${lineFeatures.length} | '
+        'poligon: ${polygonFeatures.length} | '
+        'koordinat: ${pointFeatures.length + lineCoordinateCount + polygonCoordinateCount} | '
+        'overlay: ${rasterOverlays.length}',
+      );
+    }
 
     final document = _firstDescendant(xml, 'Document');
-
     final documentName =
-        (document == null ? null : _childText(document, 'name')) ?? fileName;
+        _nonEmpty(document == null ? null : _childText(document, 'name')) ??
+        _stripExtension(fileName);
 
     return ImportedMap(
       id: id,
@@ -249,106 +297,136 @@ class KmlImportService {
   }
 
   // ==========================================
+  // XML
+  // ==========================================
+
+  XmlDocument _parseXml(Uint8List data) {
+    var text = utf8.decode(data, allowMalformed: true);
+
+    // Buang BOM dan spasi/baris kosong sebelum deklarasi XML.
+    var start = 0;
+    while (start < text.length) {
+      final unit = text.codeUnitAt(start);
+      if (unit == 0xFEFF ||
+          unit == 0x20 ||
+          unit == 0x09 ||
+          unit == 0x0A ||
+          unit == 0x0D) {
+        start++;
+      } else {
+        break;
+      }
+    }
+    if (start > 0) text = text.substring(start);
+
+    try {
+      return XmlDocument.parse(text);
+    } on XmlException catch (error) {
+      throw FormatException('File KML tidak valid: ${error.message}');
+    }
+  }
+
+  // ==========================================
   // PARSING STYLE KML
   // ==========================================
 
-  _KmlStyle _resolveStyle(
-    XmlElement placemark,
-    Map<String, _KmlStyle> styleMap,
+  /// Mendaftarkan `<StyleMap>`: memakai pasangan "normal" yang menunjuk
+  /// ke `<Style>` (atau berisi `<Style>` inline).
+  void _registerStyleMaps(
+    List<XmlElement> styleMapElements,
+    Map<String, _KmlStyle> styles,
   ) {
-    final inlineStyle = placemark.childElements
-        .where((element) => element.localName == 'Style')
-        .firstOrNull;
+    for (final styleMap in styleMapElements) {
+      final id = styleMap.getAttribute('id');
+      if (id == null) continue;
 
-    if (inlineStyle != null) {
-      return _parseStyleElement(inlineStyle);
+      for (final pair in styleMap.childElements) {
+        if (pair.localName != 'Pair') continue;
+        if (_childText(pair, 'key') != 'normal') continue;
+
+        final target = _styleFromUrl(_childText(pair, 'styleUrl'), styles);
+        if (target != null) {
+          styles[id] = target;
+        } else {
+          final inline = _firstChild(pair, 'Style');
+          if (inline != null) styles[id] = _parseStyleElement(inline);
+        }
+        break;
+      }
     }
+  }
 
-    final styleUrl = _childText(placemark, 'styleUrl');
+  _KmlStyle? _styleFromUrl(String? url, Map<String, _KmlStyle> styles) {
+    if (url == null || url.isEmpty) return null;
+    final hashIndex = url.lastIndexOf('#');
+    if (hashIndex == -1) return null;
+    return styles[url.substring(hashIndex + 1)];
+  }
 
-    if (styleUrl != null && styleUrl.startsWith('#')) {
-      final styleId = styleUrl.substring(1);
-      final style = styleMap[styleId];
+  _KmlStyle _resolveStyle(XmlElement placemark, Map<String, _KmlStyle> styles) {
+    final inlineStyle = _firstChild(placemark, 'Style');
+    if (inlineStyle != null) return _parseStyleElement(inlineStyle);
 
-      if (style != null) return style;
-    }
-
-    return _KmlStyle();
+    return _styleFromUrl(_childText(placemark, 'styleUrl'), styles) ??
+        _KmlStyle();
   }
 
   _KmlStyle _parseStyleElement(XmlElement styleElement) {
     final result = _KmlStyle();
 
     final lineStyle = _firstChild(styleElement, 'LineStyle');
-
     if (lineStyle != null) {
       final colorStr = _childText(lineStyle, 'color');
-
-      if (colorStr != null) {
-        result.lineColor = _parseKmlColor(colorStr);
-      }
+      if (colorStr != null) result.lineColor = _parseKmlColor(colorStr);
 
       final widthStr = _childText(lineStyle, 'width');
-
       if (widthStr != null) {
         result.lineWidth = double.tryParse(widthStr) ?? 3.0;
       }
     }
 
     final polyStyle = _firstChild(styleElement, 'PolyStyle');
-
     if (polyStyle != null) {
       final colorStr = _childText(polyStyle, 'color');
-
-      if (colorStr != null) {
-        result.polyColor = _parseKmlColor(colorStr);
-        result.hasPolyColor = true;
-      }
+      if (colorStr != null) result.polyColor = _parseKmlColor(colorStr);
 
       final fillStr = _childText(polyStyle, 'fill');
+      if (fillStr != null && _isFalse(fillStr)) result.fillEnabled = false;
 
-      if (fillStr != null && (fillStr == '0' || fillStr == 'false')) {
-        result.polyFillOpacity = 0.0;
+      final outlineStr = _childText(polyStyle, 'outline');
+      if (outlineStr != null && _isFalse(outlineStr)) {
+        result.outlineEnabled = false;
       }
     }
 
     final iconStyle = _firstChild(styleElement, 'IconStyle');
-
     if (iconStyle != null) {
       final colorStr = _childText(iconStyle, 'color');
-
-      if (colorStr != null) {
-        result.iconColor = _parseKmlColor(colorStr);
-      }
+      if (colorStr != null) result.iconColor = _parseKmlColor(colorStr);
     }
 
     return result;
   }
 
-  /// Mengubah warna KML (AABBGGRR) menjadi warna Flutter.
-  Color? _parseKmlColor(String kmlHex) {
-    final hex = kmlHex.trim();
-
-    if (hex.length != 8) return null;
-
-    try {
-      final a = int.parse(hex.substring(0, 2), radix: 16);
-      final b = int.parse(hex.substring(2, 4), radix: 16);
-      final g = int.parse(hex.substring(4, 6), radix: 16);
-      final r = int.parse(hex.substring(6, 8), radix: 16);
-
-      return Color.fromARGB(a, r, g, b);
-    } catch (_) {
-      return null;
-    }
+  bool _isFalse(String value) {
+    final v = value.trim().toLowerCase();
+    return v == '0' || v == 'false';
   }
 
-  XmlElement? _firstChild(XmlElement element, String name) {
-    for (final child in element.childElements) {
-      if (child.localName == name) return child;
-    }
+  /// Mengubah warna KML (AABBGGRR, atau BBGGRR) menjadi warna Flutter.
+  Color? _parseKmlColor(String kmlHex) {
+    var hex = kmlHex.trim();
+    if (hex.startsWith('#')) hex = hex.substring(1);
+    if (hex.length == 6) hex = 'ff$hex';
+    if (hex.length != 8) return null;
 
-    return null;
+    final a = int.tryParse(hex.substring(0, 2), radix: 16);
+    final b = int.tryParse(hex.substring(2, 4), radix: 16);
+    final g = int.tryParse(hex.substring(4, 6), radix: 16);
+    final r = int.tryParse(hex.substring(6, 8), radix: 16);
+    if (a == null || b == null || g == null || r == null) return null;
+
+    return Color.fromARGB(a, r, g, b);
   }
 
   // ==========================================
@@ -356,9 +434,18 @@ class KmlImportService {
   // ==========================================
 
   _KmlSource _readKmz(Uint8List bytes) {
-    final archive = ZipDecoder().decodeBytes(bytes);
+    final Archive archive;
+    try {
+      archive = ZipDecoder().decodeBytes(bytes);
+    } catch (_) {
+      throw const FormatException(
+        'File KMZ rusak atau bukan arsip ZIP yang valid.',
+      );
+    }
 
-    final files = archive.files.where((file) => file.isFile).toList();
+    final files = archive.files
+        .where((file) => file.isFile && !_isJunkEntry(file.name))
+        .toList();
 
     final kmlFiles = files
         .where((file) => file.name.toLowerCase().endsWith('.kml'))
@@ -374,46 +461,58 @@ class KmlImportService {
     );
 
     if (kmlFile.size > maxDocumentBytes) {
-      throw const FormatException(
-        'Ukuran dokumen KML di dalam KMZ melebihi 50 MB.',
+      throw FormatException(
+        'Ukuran dokumen KML di dalam KMZ melebihi ${_mb(maxDocumentBytes)} MB.',
+      );
+    }
+
+    final kmlBytes = kmlFile.readBytes() ?? Uint8List(0);
+
+    // Periksa ukuran sebenarnya setelah dekompresi.
+    if (kmlBytes.length > maxDocumentBytes) {
+      throw FormatException(
+        'Ukuran dokumen KML di dalam KMZ melebihi ${_mb(maxDocumentBytes)} MB.',
       );
     }
 
     final baseDirectory = _parentDirectory(kmlFile.name);
     final assets = <String, ArchiveFile>{};
+    final imagePattern = RegExp(r'\.(png|jpe?g|webp)$', caseSensitive: false);
 
     for (final file in files) {
       final assetPath = _normalizeArchivePath(file.name).toLowerCase();
-
-      if (!RegExp(
-        r'\.(png|jpe?g|webp)$',
-        caseSensitive: false,
-      ).hasMatch(assetPath)) {
-        continue;
-      }
-
+      if (!imagePattern.hasMatch(assetPath)) continue;
       assets[assetPath] = file;
     }
 
     return _KmlSource(
-      bytes: kmlFile.readBytes() ?? Uint8List(0),
+      bytes: kmlBytes,
       assets: assets,
       baseDirectory: baseDirectory,
     );
   }
 
+  /// Entri sampah buatan macOS ("__MACOSX/", "._nama").
+  bool _isJunkEntry(String path) {
+    final normalized = path.replaceAll('\\', '/').toLowerCase();
+    if (normalized.startsWith('__macosx/')) return true;
+    return normalized.split('/').last.startsWith('._');
+  }
+
   List<LatLng> _coordinates(XmlElement element) {
     final coordinateElement = _firstDescendant(element, 'coordinates');
-
     if (coordinateElement == null) return const [];
+
+    final text = coordinateElement.innerText.trim();
+    if (text.isEmpty) return const [];
+
+    // Toleran terhadap format "lon, lat, alt" (ada spasi di sekitar koma).
+    final normalized = text.replaceAll(RegExp(r'\s*,\s*'), ',');
 
     final result = <LatLng>[];
 
-    for (final item in coordinateElement.innerText.trim().split(
-      RegExp(r'\s+'),
-    )) {
+    for (final item in normalized.split(RegExp(r'\s+'))) {
       final parts = item.split(',');
-
       if (parts.length < 2) continue;
 
       final longitude = double.tryParse(parts[0]);
@@ -421,6 +520,8 @@ class KmlImportService {
 
       if (latitude == null ||
           longitude == null ||
+          !latitude.isFinite ||
+          !longitude.isFinite ||
           latitude < -90 ||
           latitude > 90 ||
           longitude < -180 ||
@@ -444,7 +545,11 @@ class KmlImportService {
       return null;
     }
 
-    if (north < south ||
+    if (!north.isFinite ||
+        !south.isFinite ||
+        !east.isFinite ||
+        !west.isFinite ||
+        north < south ||
         north > 90 ||
         south < -90 ||
         east < -180 ||
@@ -457,11 +562,21 @@ class KmlImportService {
     return LatLngBounds.fromPoints([LatLng(north, west), LatLng(south, east)]);
   }
 
+  // ==========================================
+  // UTILITAS
+  // ==========================================
+
   String? _childText(XmlElement element, String name) {
     for (final child in element.childElements) {
       if (child.localName == name) return child.innerText.trim();
     }
+    return null;
+  }
 
+  XmlElement? _firstChild(XmlElement element, String name) {
+    for (final child in element.childElements) {
+      if (child.localName == name) return child;
+    }
     return null;
   }
 
@@ -469,14 +584,37 @@ class KmlImportService {
     for (final descendant in element.descendantElements) {
       if (descendant.localName == name) return descendant;
     }
-
     return null;
   }
 
-  String _parentDirectory(String path) {
-    final separator = path.lastIndexOf('/');
+  /// Mengubah string kosong/spasi menjadi null.
+  String? _nonEmpty(String? value) {
+    if (value == null) return null;
+    final trimmed = value.trim();
+    return trimmed.isEmpty ? null : trimmed;
+  }
 
-    return separator == -1 ? '' : path.substring(0, separator + 1);
+  String _stripExtension(String fileName) {
+    return fileName.replaceAll(
+      RegExp(r'\.(kml|kmz)$', caseSensitive: false),
+      '',
+    );
+  }
+
+  String _safeDecode(String value) {
+    try {
+      return Uri.decodeFull(value);
+    } catch (_) {
+      return value;
+    }
+  }
+
+  String _mb(int bytes) => (bytes / (1024 * 1024)).toStringAsFixed(0);
+
+  String _parentDirectory(String path) {
+    final normalized = path.replaceAll('\\', '/');
+    final separator = normalized.lastIndexOf('/');
+    return separator == -1 ? '' : normalized.substring(0, separator + 1);
   }
 
   String _normalizeArchivePath(String path) {
@@ -506,8 +644,8 @@ class _KmlStyle {
   Color? iconColor;
 
   double lineWidth = 3.0;
-  bool hasPolyColor = false;
-  double polyFillOpacity = 1.0;
+  bool fillEnabled = true;
+  bool outlineEnabled = true;
 }
 
 class _KmlSource {
