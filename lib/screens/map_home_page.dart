@@ -537,11 +537,21 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
     unawaited(_updateMeasureLayers());
   }
 
-  void _addMeasurePoint(LatLng point) {
-    if (!_isMeasuring) return;
-    setState(() => _measurePoints = [..._measurePoints, point]);
-    unawaited(_updateMeasureLayers());
-  }
+  void _addMeasurePoint(LatLng point, {required String source}) {
+  if (!_isMeasuring) return;
+
+  setState(() {
+    _measurePoints = [..._measurePoints, point];
+  });
+
+  debugPrint(
+    '[MEASURE] sumber=$source | '
+    'jumlah=${_measurePoints.length} | '
+    'lat=${point.latitude} | lng=${point.longitude}',
+  );
+
+  unawaited(_updateMeasureLayers());
+}
 
   void _undoMeasurePoint() {
     if (_measurePoints.isEmpty) return;
@@ -625,9 +635,12 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
               runSpacing: 4,
               children: [
                 FilledButton.tonalIcon(
-                  onPressed: () => _addMeasurePoint(_center),
-                  icon: const Icon(Icons.add),
-                  label: const Text('Tambah'),
+                onPressed: () => _addMeasurePoint(
+                _center,
+                source: 'TOMBOL_TAMBAH',
+                  ),
+                icon: const Icon(Icons.add),
+                 label: const Text('Tambah'),
                 ),
                 OutlinedButton.icon(
                   onPressed: _measurePoints.isEmpty ? null : _undoMeasurePoint,
@@ -1057,9 +1070,10 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
                       featureTapsTriggersMapClick: true,
 
                       onMapClick: (point, coordinates) {
-                        if (_isMeasuring) {
-                          _addMeasurePoint(
+                      if (_isMeasuring) {
+                        _addMeasurePoint(
                             LatLng(coordinates.latitude, coordinates.longitude),
+                            source: 'KLIK_PETA',
                           );
                         } else {
                           unawaited(_handleWaypointMapClick(point));
