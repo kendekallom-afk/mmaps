@@ -1,5 +1,7 @@
 import 'dart:ui';
+
 import 'package:latlong2/latlong.dart';
+
 import '../models/imported_map.dart';
 
 /// Container untuk FeatureCollection GeoJSON yang dipisahkan berdasarkan tipe geometri
@@ -69,7 +71,7 @@ class GeoJsonHelper {
           'fillColor': colorToHex(poly.fillColor),
           'fillOpacity': colorToOpacity(poly.fillColor),
           'borderColor': colorToHex(poly.borderColor),
-          'borderWidth': 2.0,
+          'borderWidth': 0.0,
         },
       });
     }
@@ -81,8 +83,9 @@ class GeoJsonHelper {
         'type': 'Feature',
         'geometry': {
           'type': 'LineString',
-          'coordinates':
-              line.points.map((p) => [p.longitude, p.latitude]).toList(),
+          'coordinates': line.points
+              .map((p) => [p.longitude, p.latitude])
+              .toList(),
         },
         'properties': {
           'name': line.name,
@@ -110,15 +113,16 @@ class GeoJsonHelper {
       });
     }
 
-    return {
-      'type': 'FeatureCollection',
-      'features': features,
-    };
+    return {'type': 'FeatureCollection', 'features': features};
   }
 
   /// Mengonversi kumpulan [ImportedMap] aktif menjadi 3 FeatureCollection GeoJSON terpisah
   /// (Polygons, Lines, Points) agar dapat di-render secara optimal di MapLibre style layers.
-  static GeoJsonCollections fromImportedMaps(Iterable<ImportedMap> maps) {
+  static GeoJsonCollections fromImportedMaps(
+    Iterable<ImportedMap> maps, {
+    Map<String, double> layerOpacities = const {},
+    Map<String, bool> layerOutlines = const {},
+  }) {
     final polygonFeatures = <Map<String, dynamic>>[];
     final lineFeatures = <Map<String, dynamic>>[];
     final pointFeatures = <Map<String, dynamic>>[];
@@ -145,7 +149,8 @@ class GeoJsonHelper {
             'fillColor': colorToHex(poly.fillColor),
             'fillOpacity': colorToOpacity(poly.fillColor),
             'borderColor': colorToHex(poly.borderColor),
-            'borderWidth': 2.0,
+            'borderWidth': layerOutlines[map.name] == true ? 2.0 : 0.0,
+            'layerOpacity': layerOpacities[map.name] ?? 1.0,
           },
         });
       }
@@ -157,14 +162,16 @@ class GeoJsonHelper {
           'type': 'Feature',
           'geometry': {
             'type': 'LineString',
-            'coordinates':
-                line.points.map((p) => [p.longitude, p.latitude]).toList(),
+            'coordinates': line.points
+                .map((p) => [p.longitude, p.latitude])
+                .toList(),
           },
           'properties': {
             'name': line.name,
             'color': colorToHex(line.color),
             'opacity': colorToOpacity(line.color),
             'width': line.width,
+            'layerOpacity': layerOpacities[map.name] ?? 1.0,
           },
         });
       }
@@ -182,24 +189,16 @@ class GeoJsonHelper {
             'color': colorToHex(pt.color),
             'opacity': colorToOpacity(pt.color),
             'radius': 6.0,
+            'layerOpacity': layerOpacities[map.name] ?? 1.0,
           },
         });
       }
     }
 
     return GeoJsonCollections(
-      polygons: {
-        'type': 'FeatureCollection',
-        'features': polygonFeatures,
-      },
-      lines: {
-        'type': 'FeatureCollection',
-        'features': lineFeatures,
-      },
-      points: {
-        'type': 'FeatureCollection',
-        'features': pointFeatures,
-      },
+      polygons: {'type': 'FeatureCollection', 'features': polygonFeatures},
+      lines: {'type': 'FeatureCollection', 'features': lineFeatures},
+      points: {'type': 'FeatureCollection', 'features': pointFeatures},
     );
   }
 }

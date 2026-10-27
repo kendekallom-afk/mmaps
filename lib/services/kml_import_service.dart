@@ -37,21 +37,11 @@ class KmlImportService {
   // BATAS UKURAN FILE
   // ------------------------------------------
 
-  /// Ukuran file mentah (KML/KMZ). Pakai konstanta ini juga di layar impor
-  /// agar batasnya selalu sama.
-  static const int maxInputBytes = 30 * 1024 * 1024;
-
-  /// Ukuran dokumen KML (setelah KMZ diekstrak). DOM XML bisa memakan
-  /// belasan kali lipat ukuran teksnya di memori.
-  static const int maxDocumentBytes = 8 * 1024 * 1024;
-
-  /// Batas jumlah entri dan total ukuran hasil ekstraksi arsip.
-  /// Catatan: package archive mendekompresi arsip sebelum batas ini diperiksa,
-  /// sehingga ini lapisan perlindungan tambahan, bukan pencegah lonjakan RAM.
+  static const int maxInputBytes = 75 * 1024 * 1024;
+  static const int maxDocumentBytes = 75 * 1024 * 1024;
   static const int maxArchiveEntries = 2000;
   static const int maxTotalExpandedBytes = 100 * 1024 * 1024;
 
-  /// Ukuran file satu gambar overlay dan total semua gambar overlay.
   static const int maxOverlayBytes = 15 * 1024 * 1024;
   static const int maxTotalOverlayBytes = 40 * 1024 * 1024;
 
@@ -59,22 +49,17 @@ class KmlImportService {
   // BATAS KOMPLEKSITAS DATA
   // ------------------------------------------
 
-  /// Jumlah fitur (titik + garis + poligon) dan total koordinat.
   static const int maxFeatures = 30000;
   static const int maxCoordinates = 300000;
 
   // ------------------------------------------
-  // BATAS GAMBAR OVERLAY (berdasarkan piksel, bukan hanya byte file)
-  // Gambar RGBA yang di-decode memakai kira-kira lebar x tinggi x 4 byte,
-  // dan GPU punya batas ukuran tekstur (sering 4096 piksel per sisi).
+  // BATAS GAMBAR OVERLAY
   // ------------------------------------------
 
   static const int maxOverlayDimension = 4096;
   static const int maxTotalOverlayPixels = 12000000;
   static const int maxOverlayCount = 20;
 
-  /// Set `false` jika `MapHomePage` belum merender `overlays` ke peta.
-  /// Dengan begitu byte gambar tidak dibaca ke memori tanpa guna.
   static const bool loadOverlayImages = true;
 
   static final RegExp _spaceAroundComma = RegExp(r'\s,|,\s');
@@ -115,10 +100,10 @@ class KmlImportService {
       );
     }
 
-    // ---------- TAHAP 1: vektor (DOM hanya hidup di dalam fungsi ini) ----------
+    // ---------- TAHAP 1: vektor ----------
     final extraction = _extractVectors(source.takeBytes(), fileName);
 
-    // ---------- TAHAP 2: overlay (DOM sudah lepas dari memori) ----------
+    // ---------- TAHAP 2: overlay ----------
     final overlays = loadOverlayImages
         ? _loadOverlays(extraction.overlayRefs, source)
         : const <MapRasterOverlay>[];
@@ -170,7 +155,6 @@ class KmlImportService {
   _Extraction _extractVectors(Uint8List kmlBytes, String fileName) {
     final xml = _parseXml(kmlBytes);
 
-    // Satu kali penelusuran DOM untuk mengumpulkan elemen yang relevan.
     final styleElements = <XmlElement>[];
     final styleMapElements = <XmlElement>[];
     final placemarks = <XmlElement>[];
@@ -189,7 +173,6 @@ class KmlImportService {
       }
     }
 
-    // Style global, lalu StyleMap (yang merujuk ke Style).
     final styles = <String, _KmlStyle>{};
     for (final style in styleElements) {
       styles[style.getAttribute('id')!] = _parseStyleElement(style);
@@ -269,8 +252,8 @@ class KmlImportService {
               for (final inner in geometry.descendantElements.where(
                 (element) => element.localName == 'innerBoundaryIs',
               )) {
-                final remaining = maxCoordinates -
-                    coordinateCount - polygonCoordinateCount;
+                final remaining =
+                    maxCoordinates - coordinateCount - polygonCoordinateCount;
                 final ring = _coordinates(
                   inner,
                   maxAllowedCoordinates: remaining,
@@ -281,8 +264,6 @@ class KmlImportService {
                 }
               }
 
-              // `fill` bernilai 0 => tanpa isian.
-              // Tanpa warna poligon => isian biru tipis.
               final Color fillColor;
               if (!style.fillEnabled) {
                 fillColor = Colors.transparent;
@@ -292,7 +273,6 @@ class KmlImportService {
                 fillColor = Colors.blue.withValues(alpha: 0.18);
               }
 
-              // `outline` bernilai 0 => tanpa garis tepi.
               final borderColor = style.outlineEnabled
                   ? (style.lineColor ?? Colors.blue)
                   : Colors.transparent;
@@ -311,12 +291,10 @@ class KmlImportService {
             }
         }
 
-        // Hentikan lebih awal jika data terlalu kompleks untuk perangkat.
         _checkComplexity(featureCount, coordinateCount);
       }
     }
 
-    // Referensi overlay saja (nama, href, bounds). Byte gambar belum dibaca.
     final overlayRefs = <_OverlayRef>[];
     for (final groundOverlay in groundOverlays) {
       if (overlayRefs.length >= maxOverlayCount) {
@@ -329,7 +307,6 @@ class KmlImportService {
       final box = _firstDescendant(groundOverlay, 'LatLonBox');
       if (href == null || box == null) continue;
 
-      // Gambar dari internet tidak diambil (harus ada di dalam KMZ).
       final lowerHref = href.toLowerCase();
       if (lowerHref.startsWith('http://') || lowerHref.startsWith('https://')) {
         continue;
@@ -388,8 +365,6 @@ class KmlImportService {
 
   // ==========================================
   // TAHAP 2: OVERLAY GAMBAR
-  // Catatan: atribut `rotation` pada LatLonBox dan `gx:LatLonQuad` belum
-  // didukung, jadi overlay yang diputar akan salah posisi.
   // ==========================================
 
   List<MapRasterOverlay> _loadOverlays(
@@ -409,7 +384,6 @@ class KmlImportService {
           source.assets[_normalizeArchivePath(decodedHref).toLowerCase()];
       if (asset == null) continue;
 
-      // Pemeriksaan awal memakai ukuran dari header ZIP (sebelum inflasi).
       if (asset.size > maxOverlayBytes ||
           totalBytes + asset.size > maxTotalOverlayBytes) {
         throw FormatException(
@@ -422,9 +396,6 @@ class KmlImportService {
       final imageBytes = asset.readBytes();
       if (imageBytes == null) continue;
 
-      // Header ZIP bisa tidak jujur, jadi ukuran sebenarnya diperiksa lagi.
-      // (Pemeriksaan ini terjadi SETELAH inflasi; ia mencegah pemrosesan
-      // lanjutan, bukan lonjakan memori saat inflasi itu sendiri.)
       totalBytes += imageBytes.length;
       if (imageBytes.length > maxOverlayBytes ||
           totalBytes > maxTotalOverlayBytes) {
@@ -465,10 +436,7 @@ class KmlImportService {
     return result;
   }
 
-  /// Membaca lebar dan tinggi gambar dari header, tanpa decode penuh.
-  /// Mendukung PNG, JPEG, dan WebP. Mengembalikan null jika tidak dikenali.
   ({int width, int height})? _readImageSize(Uint8List b) {
-    // PNG: lebar dan tinggi ada di chunk IHDR.
     if (b.length >= 24 &&
         b[0] == 0x89 &&
         b[1] == 0x50 &&
@@ -479,7 +447,6 @@ class KmlImportService {
       return (width: w, height: h);
     }
 
-    // JPEG: cari marker SOF.
     if (b.length > 4 && b[0] == 0xFF && b[1] == 0xD8) {
       var i = 2;
       while (i + 9 < b.length) {
@@ -513,7 +480,6 @@ class KmlImportService {
       return null;
     }
 
-    // WebP: RIFF....WEBP lalu chunk VP8X, VP8L, atau VP8.
     if (b.length > 30 && _matches(b, 0, 'RIFF') && _matches(b, 8, 'WEBP')) {
       if (_matches(b, 12, 'VP8X')) {
         final w = 1 + (b[24] | (b[25] << 8) | (b[26] << 16));
@@ -546,13 +512,12 @@ class KmlImportService {
   }
 
   // ==========================================
-  // XML
+  // XML & STYLE
   // ==========================================
 
   XmlDocument _parseXml(Uint8List data) {
     var text = utf8.decode(data, allowMalformed: true);
 
-    // Buang BOM dan spasi/baris kosong sebelum deklarasi XML.
     var start = 0;
     while (start < text.length) {
       final unit = text.codeUnitAt(start);
@@ -574,12 +539,6 @@ class KmlImportService {
   bool _isSpaceUnit(int unit) =>
       unit == 0x20 || unit == 0x09 || unit == 0x0A || unit == 0x0D;
 
-  // ==========================================
-  // PARSING STYLE KML
-  // ==========================================
-
-  /// Mendaftarkan `StyleMap`: memakai pasangan "normal" yang menunjuk
-  /// ke `Style` (atau berisi `Style` inline).
   void _registerStyleMaps(
     List<XmlElement> styleMapElements,
     Map<String, _KmlStyle> styles,
@@ -661,7 +620,6 @@ class KmlImportService {
     return v == '0' || v == 'false';
   }
 
-  /// Mengubah warna KML (AABBGGRR, atau BBGGRR) menjadi warna Flutter.
   Color? _parseKmlColor(String kmlHex) {
     var hex = kmlHex.trim();
     if (hex.startsWith('#')) hex = hex.substring(1);
@@ -678,10 +636,169 @@ class KmlImportService {
   }
 
   // ==========================================
+  // KEAMANAN ZIP (PREFLIGHT)
+  // ==========================================
+
+  void _preflightKmzZip(Uint8List bytes) {
+    debugPrint('[KMZ PREFLIGHT] Mulai pemeriksaan ZIP');
+
+    const eocdSignature = 0x06054b50;
+    const centralHeaderSignature = 0x02014b50;
+    const zip64ExtraId = 0x0001;
+    const symlinkType = 0xA000;
+    const maxZipCommentLength = 65535;
+    const eocdMinLength = 22;
+
+    if (bytes.length < eocdMinLength) {
+      throw const FormatException('File KMZ terlalu kecil atau bukan ZIP valid.');
+    }
+
+    final data = ByteData.sublistView(bytes);
+
+    int u16(int offset) => data.getUint16(offset, Endian.little);
+    int u32(int offset) => data.getUint32(offset, Endian.little);
+
+    final searchStart = bytes.length > eocdMinLength + maxZipCommentLength
+        ? bytes.length - eocdMinLength - maxZipCommentLength
+        : 0;
+
+    var eocd = -1;
+
+    for (var i = bytes.length - eocdMinLength; i >= searchStart; i--) {
+      if (u32(i) == eocdSignature) {
+        final commentLength = u16(i + 20);
+
+        if (i + eocdMinLength + commentLength == bytes.length) {
+          eocd = i;
+          break;
+        }
+      }
+    }
+
+    if (eocd < 0) {
+      throw const FormatException(
+        'Struktur KMZ tidak valid: direktori akhir ZIP tidak ditemukan.',
+      );
+    }
+
+    final diskNumber = u16(eocd + 4);
+    final centralDisk = u16(eocd + 6);
+    final entriesOnDisk = u16(eocd + 8);
+    final totalEntries = u16(eocd + 10);
+    final centralSize = u32(eocd + 12);
+    final centralOffset = u32(eocd + 16);
+
+    if (diskNumber != 0 || centralDisk != 0 || entriesOnDisk != totalEntries) {
+      throw const FormatException('KMZ multi-disk tidak didukung.');
+    }
+
+    if (totalEntries == 0xFFFF ||
+        centralSize == 0xFFFFFFFF ||
+        centralOffset == 0xFFFFFFFF) {
+      throw const FormatException('KMZ ZIP64 belum didukung.');
+    }
+
+    if (totalEntries > maxArchiveEntries) {
+      throw FormatException(
+        'KMZ memiliki terlalu banyak entri ($totalEntries). '
+        'Batas: $maxArchiveEntries entri.',
+      );
+    }
+
+    if (centralOffset > eocd ||
+        centralSize > eocd - centralOffset ||
+        centralOffset + centralSize != eocd) {
+      throw const FormatException('Struktur direktori ZIP KMZ tidak valid.');
+    }
+
+    var cursor = centralOffset;
+    final centralEnd = centralOffset + centralSize;
+
+    for (var i = 0; i < totalEntries; i++) {
+      if (cursor > centralEnd - 46 || u32(cursor) != centralHeaderSignature) {
+        throw const FormatException('Entri direktori ZIP KMZ tidak valid.');
+      }
+
+      final versionMadeBy = u16(cursor + 4);
+      final flags = u16(cursor + 8);
+      final nameLength = u16(cursor + 28);
+      final extraLength = u16(cursor + 30);
+      final commentLength = u16(cursor + 32);
+      final diskStart = u16(cursor + 34);
+      final externalAttributes = u32(cursor + 38);
+      final localHeaderOffset = u32(cursor + 42);
+
+      final recordLength = 46 + nameLength + extraLength + commentLength;
+
+      if (recordLength > centralEnd - cursor) {
+        throw const FormatException('Panjang entri ZIP KMZ tidak valid.');
+      }
+
+      if (diskStart != 0 || localHeaderOffset == 0xFFFFFFFF) {
+        throw const FormatException(
+          'Entri ZIP multi-disk atau ZIP64 tidak didukung.',
+        );
+      }
+
+      if ((flags & 0x0001) != 0) {
+        throw const FormatException('KMZ terenkripsi tidak didukung.');
+      }
+
+      var extraCursor = cursor + 46 + nameLength;
+      final extraEnd = extraCursor + extraLength;
+
+      while (extraCursor < extraEnd) {
+        if (extraEnd - extraCursor < 4) {
+          throw const FormatException('Data tambahan ZIP KMZ tidak valid.');
+        }
+
+        final extraId = u16(extraCursor);
+        final extraDataLength = u16(extraCursor + 2);
+        extraCursor += 4;
+
+        if (extraDataLength > extraEnd - extraCursor) {
+          throw const FormatException(
+            'Panjang data tambahan ZIP KMZ tidak valid.',
+          );
+        }
+
+        if (extraId == zip64ExtraId) {
+          throw const FormatException(
+            'KMZ dengan ekstensi ZIP64 belum didukung.',
+          );
+        }
+
+        extraCursor += extraDataLength;
+      }
+
+      final creatorSystem = versionMadeBy >> 8;
+      final unixMode = externalAttributes >> 16;
+      final fileType = unixMode & 0xF000;
+
+      if (creatorSystem == 3 && fileType == symlinkType) {
+        debugPrint('[KMZ PREFLIGHT] Symlink terdeteksi; KMZ ditolak');
+        throw const FormatException(
+          'KMZ berisi entri symbolic link yang tidak diizinkan.',
+        );
+      }
+
+      cursor += recordLength;
+    }
+
+    if (cursor != centralEnd) {
+      throw const FormatException('Ukuran direktori ZIP KMZ tidak cocok.');
+    }
+
+    debugPrint('[KMZ PREFLIGHT] Pemeriksaan selesai. ZIP aman.');
+  }
+
+  // ==========================================
   // PARSING FILE & GEOMETRI
   // ==========================================
 
   _KmlSource _readKmz(Uint8List bytes) {
+    _preflightKmzZip(bytes);
+
     final Archive archive;
     try {
       archive = ZipDecoder().decodeBytes(bytes);
@@ -726,7 +843,6 @@ class KmlImportService {
       orElse: () => kmlFiles.first,
     );
 
-    // Pemeriksaan awal memakai ukuran dari header ZIP (sebelum inflasi).
     if (kmlFile.size > maxDocumentBytes) {
       throw FormatException(
         'Ukuran dokumen KML di dalam KMZ melebihi ${_mb(maxDocumentBytes)} MB.',
@@ -735,7 +851,6 @@ class KmlImportService {
 
     final kmlBytes = kmlFile.readBytes() ?? Uint8List(0);
 
-    // Header ZIP bisa tidak jujur, jadi ukuran sebenarnya diperiksa lagi.
     if (kmlBytes.length > maxDocumentBytes) {
       throw FormatException(
         'Ukuran dokumen KML di dalam KMZ melebihi ${_mb(maxDocumentBytes)} MB.',
@@ -758,7 +873,6 @@ class KmlImportService {
     );
   }
 
-  /// Entri sampah buatan macOS ("__MACOSX/", "._nama").
   bool _isJunkEntry(String path) {
     final normalized = path.replaceAll('\\', '/').toLowerCase();
     if (normalized.startsWith('__macosx/')) return true;
@@ -778,7 +892,6 @@ class KmlImportService {
     var text = coordinateElement.innerText.trim();
     if (text.isEmpty) return const [];
 
-    // Toleran terhadap format "lon, lat, alt" (ada spasi di sekitar koma).
     if (_spaceAroundComma.hasMatch(text)) {
       text = text.replaceAll(_commaWithSpaces, ',');
     }
@@ -787,7 +900,6 @@ class KmlImportService {
     final length = text.length;
     var i = 0;
 
-    // Pemindai manual: tidak membuat daftar string raksasa dari split().
     while (i < length) {
       while (i < length && _isSpaceUnit(text.codeUnitAt(i))) {
         i++;
@@ -806,7 +918,10 @@ class KmlImportService {
       final secondComma = token.indexOf(',', firstComma + 1);
       final longitude = double.tryParse(token.substring(0, firstComma));
       final latitude = double.tryParse(
-        token.substring(firstComma + 1, secondComma == -1 ? token.length : secondComma),
+        token.substring(
+          firstComma + 1,
+          secondComma == -1 ? token.length : secondComma,
+        ),
       );
 
       if (latitude == null ||
@@ -884,7 +999,6 @@ class KmlImportService {
     return null;
   }
 
-  /// Mengubah string kosong/spasi menjadi null.
   String? _nonEmpty(String? value) {
     if (value == null) return null;
     final trimmed = value.trim();
@@ -945,8 +1059,6 @@ class _KmlStyle {
   bool outlineEnabled = true;
 }
 
-/// Sumber dokumen. Byte KML diambil sekali lewat [takeBytes] lalu dilepas
-/// dari objek ini, supaya tidak ikut tertahan selama tahap overlay.
 class _KmlSource {
   Uint8List? _bytes;
   final Map<String, ArchiveFile> assets;
@@ -967,7 +1079,6 @@ class _KmlSource {
   }
 }
 
-/// Referensi overlay hasil tahap 1 (byte gambar belum dibaca).
 class _OverlayRef {
   final String name;
   final String href;
@@ -980,7 +1091,6 @@ class _OverlayRef {
   });
 }
 
-/// Hasil tahap 1.
 class _Extraction {
   final String documentName;
   final List<MapPointFeature> points;

@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:archive/archive.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mmaps_flutter/services/kml_import_service.dart';
 
@@ -51,6 +52,54 @@ void main() {
     expect(map.polygons, hasLength(1));
     expect(map.polygons.single.holes, hasLength(1));
     expect(map.bounds, isNotNull);
+  });
+
+  test('preserves the KML polygon outline color for optional display', () {
+    final map = service.parse(
+      id: 'no-outline',
+      fileName: 'no-outline.kml',
+      bytes: Uint8List.fromList(
+        utf8.encode('''
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Placemark>
+    <Style><PolyStyle><color>ff00ff00</color><outline>1</outline></PolyStyle></Style>
+    <Polygon>
+      <outerBoundaryIs><LinearRing><coordinates>
+        118,-2 119,-2 119,-3 118,-3 118,-2
+      </coordinates></LinearRing></outerBoundaryIs>
+    </Polygon>
+  </Placemark>
+</kml>
+'''),
+      ),
+    );
+
+    expect(map.polygons.single.fillColor, const Color(0xFF00FF00));
+    expect(map.polygons.single.borderColor, Colors.blue);
+  });
+
+  test('preserves the KMZ polygon outline color for optional display', () {
+    const kml = '''
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Placemark>
+    <Style><PolyStyle><color>ff00ff00</color><outline>1</outline></PolyStyle></Style>
+    <Polygon>
+      <outerBoundaryIs><LinearRing><coordinates>
+        118,-2 119,-2 119,-3 118,-3 118,-2
+      </coordinates></LinearRing></outerBoundaryIs>
+    </Polygon>
+  </Placemark>
+</kml>
+''';
+    final archive = Archive()..add(ArchiveFile.string('doc.kml', kml));
+    final map = service.parse(
+      id: 'no-outline-kmz',
+      fileName: 'no-outline.kmz',
+      bytes: Uint8List.fromList(ZipEncoder().encode(archive)),
+    );
+
+    expect(map.polygons.single.fillColor, const Color(0xFF00FF00));
+    expect(map.polygons.single.borderColor, Colors.blue);
   });
 
   test('KML parse result can be transferred from compute isolate', () async {

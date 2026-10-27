@@ -44,10 +44,7 @@ void main() {
         lines: const [
           MapLineFeature(
             name: 'Jalan Utama',
-            points: [
-              LatLng(-2.67, 118.89),
-              LatLng(-2.68, 118.90),
-            ],
+            points: [LatLng(-2.67, 118.89), LatLng(-2.68, 118.90)],
             color: Colors.blue,
             width: 4,
           ),
@@ -68,7 +65,11 @@ void main() {
         overlays: [],
       );
 
-      final collections = GeoJsonHelper.fromImportedMaps([map]);
+      final collections = GeoJsonHelper.fromImportedMaps(
+        [map],
+        layerOpacities: const {'Test Area': 0.4},
+        layerOutlines: const {'Test Area': true},
+      );
 
       // Polygons
       final polyFeatures = collections.polygons['features'] as List;
@@ -84,6 +85,8 @@ void main() {
       expect(exterior.last, [118.89, -2.67]);
       expect(poly['properties']['fillColor'], '#00ff00');
       expect(poly['properties']['borderColor'], '#003300');
+      expect(poly['properties']['borderWidth'], 2.0);
+      expect(poly['properties']['layerOpacity'], 0.4);
 
       // Lines
       final lineFeatures = collections.lines['features'] as List;
@@ -94,6 +97,7 @@ void main() {
       expect(lineCoords.first, [118.89, -2.67]);
       expect(lineCoords.last, [118.90, -2.68]);
       expect(line['properties']['width'], 4);
+      expect(line['properties']['layerOpacity'], 0.4);
 
       // Points
       final pointFeatures = collections.points['features'] as List;
@@ -102,6 +106,13 @@ void main() {
       expect(pt['geometry']['type'], 'Point');
       expect(pt['geometry']['coordinates'], [118.89, -2.67]);
       expect(pt['properties']['name'], 'Pusat Titik');
+      expect(pt['properties']['layerOpacity'], 0.4);
+
+      final defaultPolygons =
+          GeoJsonHelper.fromImportedMaps([map]).polygons['features'] as List;
+      final defaultPolygon = defaultPolygons.single as Map<String, dynamic>;
+      expect(defaultPolygon['properties']['borderWidth'], 0.0);
+      expect(defaultPolygon['properties']['layerOpacity'], 1.0);
     });
   });
 }

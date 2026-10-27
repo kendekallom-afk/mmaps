@@ -18,11 +18,14 @@ import '../services/database_helper.dart';
 import '../services/kml_import_service.dart';
 import '../services/map_file_store.dart';
 import '../utils/geojson_helper.dart';
+import '../utils/measure_calculator.dart';
 import '../views/layers_view.dart';
 import '../widgets/active_layers_overlay.dart';
 import '../widgets/crosshair.dart';
+import '../widgets/coordinate_search_dialog.dart';
 import '../widgets/custom_xyz_tiles_sheet.dart';
 import '../widgets/gps_overlay.dart';
+import '../widgets/layer_customization_sheet.dart';
 import '../widgets/map_attribution.dart';
 import '../widgets/opacity_control.dart';
 import '../widgets/tools_popup.dart';
@@ -49,7 +52,9 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
   ml.MapLibreMapController? _mapController;
   bool _isStyleLoaded = false;
   bool _layersInitialized = false;
+  bool _measureLayersInitialized = false;
   Future<void> _syncQueue = Future<void>.value();
+  Future<void> _measureUpdateQueue = Future<void>.value();
 
   StreamSubscription<Position>? _positionSubscription;
   StreamSubscription<CompassEvent>? _compassSubscription;
@@ -73,6 +78,14 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
   static const String _puckSourceId = 'user-puck-source';
   static const String _puckLayerId = 'user-puck-layer';
 
+  // Measurement sources and layers
+  static const String _measureLineSourceId = 'measure-line-source';
+  static const String _measureLineLayerId = 'measure-line-layer';
+  static const String _measureFillSourceId = 'measure-fill-source';
+  static const String _measureFillLayerId = 'measure-fill-layer';
+  static const String _measurePointsSourceId = 'measure-points-source';
+  static const String _measurePointsLayerId = 'measure-points-layer';
+
   // State peta
   LatLng _center = const LatLng(-2.67, 118.89);
   late final ValueNotifier<LatLng> _coordinateNotifier;
@@ -90,6 +103,10 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
   bool _loadingMaps = true;
   bool _importingMap = false;
   final Set<String> _busyMapIds = {};
+  final Map<String, double> _layerOpacities = {};
+  final Map<String, bool> _layerOutlines = {};
+  bool _isMeasuring = false;
+  List<LatLng> _measurePoints = [];
 
   // State waypoints
   List<Waypoint> _waypoints = [];
@@ -259,6 +276,7 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
     _mapController = controller;
     _isStyleLoaded = false;
     _layersInitialized = false;
+    _measureLayersInitialized = false;
     _syncQueue = Future<void>.value();
   }
 
@@ -279,6 +297,8 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
       await _syncMapLayers();
       if (!_isCurrentStyleController(controller)) return;
       await _applyKmlLayerOpacity();
+      if (!_isCurrentStyleController(controller)) return;
+      await _initializeMeasureLayers(controller);
       if (!_isCurrentStyleController(controller)) return;
 
       // 2. Tambahkan gambar puck
@@ -356,13 +376,313 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
   bool _isCurrentStyleController(ml.MapLibreMapController controller) =>
       identical(_mapController, controller) && _isStyleLoaded;
 
-  void _zoomToLayerByName(String layerName) {
-    for (final map in _importedMaps) {
-      if (map.isActive && map.name == layerName) {
-        _fitMapToImportedMap(map);
+  Future<void> _initializeMeasureLayers(
+    ml.MapLibreMapController controller,
+  ) async {
+    if (_measureLayersInitialized) return;
+
+    await controller.addGeoJsonSource(
+      _measureFillSourceId,
+      _measureFillGeoJson(),
+    );
+    if (!_isCurrentStyleController(controller)) return;
+    await controller.addFillLayer(
+      _measureFillSourceId,
+      _measureFillLayerId,
+      const ml.FillLayerProperties(
+        fillColor: '#28B8F2',
+        fillOpacity: 0.16,
+        fillOutlineColor: '#28B8F2',
+      ),
+    );
+    if (!_isCurrentStyleController(controller)) return;
+
+    await controller.addGeoJsonSource(
+      _measureLineSourceId,
+      _measureLineGeoJson(),
+    );
+    if (!_isCurrentStyleController(controller)) return;
+    await controller.addLineLayer(
+      _measureLineSourceId,
+      _measureLineLayerId,
+      const ml.LineLayerProperties(
+        lineColor: '#20BFFF',
+        lineWidth: 3,
+        lineOpacity: 0.95,
+        lineDasharray: [
+          'literal',
+          [2, 2],
+        ],
+        lineCap: 'round',
+        lineJoin: 'round',
+      ),
+    );
+    if (!_isCurrentStyleController(controller)) return;
+
+    await controller.addGeoJsonSource(
+      _measurePointsSourceId,
+      _measurePointsGeoJson(),
+    );
+    if (!_isCurrentStyleController(controller)) return;
+    await controller.addCircleLayer(
+      _measurePointsSourceId,
+      _measurePointsLayerId,
+      const ml.CircleLayerProperties(
+        circleColor: '#FFFFFF',
+        circleRadius: 5,
+        circleStrokeColor: '#20BFFF',
+        circleStrokeWidth: 2,
+      ),
+    );
+    if (!_isCurrentStyleController(controller)) return;
+
+    _measureLayersInitialized = true;
+  }
+
+  Map<String, dynamic> _measureFillGeoJson() {
+    if (_measurePoints.length < 3) {
+      return {'type': 'FeatureCollection', 'features': <dynamic>[]};
+    }
+
+    final ring = _measurePoints
+        .map((point) => [point.longitude, point.latitude])
+        .toList();
+    ring.add(ring.first);
+    return {
+      'type': 'FeatureCollection',
+      'features': [
+        {
+          'type': 'Feature',
+          'geometry': {
+            'type': 'Polygon',
+            'coordinates': [ring],
+          },
+          'properties': const {},
+        },
+      ],
+    };
+  }
+
+  Map<String, dynamic> _measureLineGeoJson() => {
+    'type': 'FeatureCollection',
+    'features': _measurePoints.length < 2
+        ? <dynamic>[]
+        : [
+            {
+              'type': 'Feature',
+              'geometry': {
+                'type': 'LineString',
+                'coordinates': _measurePoints
+                    .map((point) => [point.longitude, point.latitude])
+                    .toList(),
+              },
+              'properties': const {},
+            },
+          ],
+  };
+
+  Map<String, dynamic> _measurePointsGeoJson() => {
+    'type': 'FeatureCollection',
+    'features': _measurePoints
+        .map(
+          (point) => {
+            'type': 'Feature',
+            'geometry': {
+              'type': 'Point',
+              'coordinates': [point.longitude, point.latitude],
+            },
+            'properties': const {},
+          },
+        )
+        .toList(),
+  };
+
+  Future<void> _updateMeasureLayers() {
+    final update = _measureUpdateQueue.then((_) async {
+      final controller = _mapController;
+      if (!_isStyleLoaded || !_measureLayersInitialized || controller == null) {
         return;
       }
+
+      await controller.setGeoJsonSource(
+        _measureFillSourceId,
+        _measureFillGeoJson(),
+      );
+      if (!_isCurrentStyleController(controller)) return;
+      await controller.setGeoJsonSource(
+        _measureLineSourceId,
+        _measureLineGeoJson(),
+      );
+      if (!_isCurrentStyleController(controller)) return;
+      await controller.setGeoJsonSource(
+        _measurePointsSourceId,
+        _measurePointsGeoJson(),
+      );
+    });
+    _measureUpdateQueue = update.catchError((
+      Object error,
+      StackTrace stackTrace,
+    ) {
+      debugPrint('Gagal memperbarui layer ukur: $error\n$stackTrace');
+    });
+    return _measureUpdateQueue;
+  }
+
+  void _startMeasuring() {
+    setState(() {
+      _showToolsPopup = false;
+      _isMeasuring = true;
+      _measurePoints = [];
+    });
+    unawaited(_updateMeasureLayers());
+  }
+
+  void _addMeasurePoint(LatLng point) {
+    if (!_isMeasuring) return;
+    setState(() => _measurePoints = [..._measurePoints, point]);
+    unawaited(_updateMeasureLayers());
+  }
+
+  void _undoMeasurePoint() {
+    if (_measurePoints.isEmpty) return;
+    setState(
+      () =>
+          _measurePoints = _measurePoints.sublist(0, _measurePoints.length - 1),
+    );
+    unawaited(_updateMeasureLayers());
+  }
+
+  void _clearMeasurePoints() {
+    if (_measurePoints.isEmpty) return;
+    setState(() => _measurePoints = []);
+    unawaited(_updateMeasureLayers());
+  }
+
+  void _finishMeasuring() {
+    setState(() {
+      _isMeasuring = false;
+      _measurePoints = [];
+    });
+    unawaited(_updateMeasureLayers());
+  }
+
+  String _formatMeasureDistance() {
+    final meters = MeasureCalculator.distanceMeters(_measurePoints);
+    return meters >= 1000
+        ? '${(meters / 1000).toStringAsFixed(2)} km'
+        : '${meters.toStringAsFixed(0)} m';
+  }
+
+  String _formatMeasureArea() {
+    final squareMeters = MeasureCalculator.areaSquareMeters(_measurePoints);
+    return squareMeters >= 1000000
+        ? '${(squareMeters / 1000000).toStringAsFixed(2)} km²'
+        : '${squareMeters.toStringAsFixed(0)} m²';
+  }
+
+  Widget _buildMeasureOverlay() {
+    final theme = Theme.of(context);
+    return Material(
+      color: Colors.black.withValues(alpha: 0.82),
+      borderRadius: BorderRadius.circular(14),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Wrap(
+              alignment: WrapAlignment.center,
+              spacing: 20,
+              runSpacing: 4,
+              children: [
+                Text(
+                  'Jarak: ${_formatMeasureDistance()}',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                if (_measurePoints.length >= 3)
+                  Text(
+                    'Luas: ${_formatMeasureArea()}',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                Text(
+                  'Titik: ${_measurePoints.length}',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: Colors.white70,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              alignment: WrapAlignment.center,
+              spacing: 8,
+              runSpacing: 4,
+              children: [
+                FilledButton.tonalIcon(
+                  onPressed: () => _addMeasurePoint(_center),
+                  icon: const Icon(Icons.add),
+                  label: const Text('Tambah'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: _measurePoints.isEmpty ? null : _undoMeasurePoint,
+                  icon: const Icon(Icons.undo),
+                  label: const Text('Undo'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: _measurePoints.isEmpty
+                      ? null
+                      : _clearMeasurePoints,
+                  icon: const Icon(Icons.delete_outline),
+                  label: const Text('Clear'),
+                ),
+                FilledButton.icon(
+                  onPressed: _finishMeasuring,
+                  icon: const Icon(Icons.check),
+                  label: const Text('Selesai'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openLayerSettings(String layerName) async {
+    ImportedMap? selectedMap;
+    for (final map in _importedMaps) {
+      if (map.isActive && map.name == layerName) {
+        selectedMap = map;
+        break;
+      }
     }
+    if (selectedMap == null) return;
+
+    final map = selectedMap;
+    final settings = await showModalBottomSheet<LayerCustomizationSettings>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => LayerCustomizationSheet(
+        layerName: map.name,
+        initialOpacity: _layerOpacities[map.name] ?? 1,
+        initialShowOutline: _layerOutlines[map.name] ?? false,
+        onZoomToLayer: () => _fitMapToImportedMap(map),
+      ),
+    );
+    if (settings == null || !mounted) return;
+
+    setState(() {
+      _layerOpacities[map.name] = settings.opacity;
+      _layerOutlines[map.name] = settings.showOutline;
+    });
+    await _syncMapLayers();
+    await _updateLayerStyles();
   }
 
   /// Menambahkan atau memperbarui GeoJSON sources & style layers di MapLibre
@@ -382,7 +702,11 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
         identical(_mapController, controller) && _isStyleLoaded;
 
     final activeMaps = _importedMaps.where((map) => map.isActive).toList();
-    final geoJsonData = GeoJsonHelper.fromImportedMaps(activeMaps);
+    final geoJsonData = GeoJsonHelper.fromImportedMaps(
+      activeMaps,
+      layerOpacities: _layerOpacities,
+      layerOutlines: _layerOutlines,
+    );
 
     try {
       if (!_layersInitialized) {
@@ -400,15 +724,7 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
           _polyFillLayerId,
           ml.FillLayerProperties(
             fillColor: ['get', 'fillColor'],
-            fillOpacity: [
-              '*',
-              [
-                'coalesce',
-                ['get', 'fillOpacity'],
-                1,
-              ],
-              _opacity / 100,
-            ],
+            fillOpacity: _featureOpacityExpression('fillOpacity'),
           ),
         );
         if (!isCurrentController()) return;
@@ -420,15 +736,7 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
           ml.LineLayerProperties(
             lineColor: ['get', 'borderColor'],
             lineWidth: ['get', 'borderWidth'],
-            lineOpacity: [
-              '*',
-              [
-                'coalesce',
-                ['get', 'borderOpacity'],
-                1,
-              ],
-              _opacity / 100,
-            ],
+            lineOpacity: _featureOpacityExpression('borderOpacity'),
           ),
         );
         if (!isCurrentController()) return;
@@ -440,15 +748,7 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
           ml.LineLayerProperties(
             lineColor: ['get', 'color'],
             lineWidth: ['get', 'width'],
-            lineOpacity: [
-              '*',
-              [
-                'coalesce',
-                ['get', 'opacity'],
-                1,
-              ],
-              _opacity / 100,
-            ],
+            lineOpacity: _featureOpacityExpression('opacity'),
             lineCap: 'round',
             lineJoin: 'round',
           ),
@@ -462,23 +762,16 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
           ml.CircleLayerProperties(
             circleColor: ['get', 'color'],
             circleRadius: ['get', 'radius'],
-            circleOpacity: [
-              '*',
-              [
-                'coalesce',
-                ['get', 'opacity'],
-                1,
-              ],
-              _opacity / 100,
-            ],
+            circleOpacity: _featureOpacityExpression('opacity'),
             circleStrokeColor: '#FFFFFF',
             circleStrokeWidth: 1.5,
-            circleStrokeOpacity: _opacity / 100,
+            circleStrokeOpacity: _featureOpacityExpression('opacity'),
           ),
         );
         if (!isCurrentController()) return;
 
         _layersInitialized = true;
+        await _updateLayerStyles();
       } else {
         // Jika layer sudah ada, perbarui data GeoJSON secara instan
         await controller.setGeoJsonSource(_polySourceId, geoJsonData.polygons);
@@ -486,31 +779,42 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
         await controller.setGeoJsonSource(_lineSourceId, geoJsonData.lines);
         if (!isCurrentController()) return;
         await controller.setGeoJsonSource(_pointSourceId, geoJsonData.points);
+        if (!isCurrentController()) return;
+        await _updateLayerStyles();
       }
     } catch (e) {
       debugPrint('Error updating map layers: $e');
     }
   }
 
-  Future<void> _applyKmlLayerOpacity() async {
+  List<dynamic> _featureOpacityExpression(String featureOpacityProperty) => [
+    '*',
+    [
+      '*',
+      [
+        'coalesce',
+        ['get', featureOpacityProperty],
+        1,
+      ],
+      [
+        'coalesce',
+        ['get', 'layerOpacity'],
+        1,
+      ],
+    ],
+    _opacity / 100,
+  ];
+
+  Future<void> _updateLayerStyles() async {
     final controller = _mapController;
     if (!_isStyleLoaded || !_layersInitialized || controller == null) return;
 
-    final factor = _opacity / 100;
     try {
       await controller.setLayerProperties(
         _polyFillLayerId,
         ml.FillLayerProperties(
           fillColor: ['get', 'fillColor'],
-          fillOpacity: [
-            '*',
-            [
-              'coalesce',
-              ['get', 'fillOpacity'],
-              1,
-            ],
-            factor,
-          ],
+          fillOpacity: _featureOpacityExpression('fillOpacity'),
         ),
       );
       if (!identical(_mapController, controller) || !_isStyleLoaded) return;
@@ -519,15 +823,7 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
         ml.LineLayerProperties(
           lineColor: ['get', 'borderColor'],
           lineWidth: ['get', 'borderWidth'],
-          lineOpacity: [
-            '*',
-            [
-              'coalesce',
-              ['get', 'borderOpacity'],
-              1,
-            ],
-            factor,
-          ],
+          lineOpacity: _featureOpacityExpression('borderOpacity'),
         ),
       );
       if (!identical(_mapController, controller) || !_isStyleLoaded) return;
@@ -536,15 +832,7 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
         ml.LineLayerProperties(
           lineColor: ['get', 'color'],
           lineWidth: ['get', 'width'],
-          lineOpacity: [
-            '*',
-            [
-              'coalesce',
-              ['get', 'opacity'],
-              1,
-            ],
-            factor,
-          ],
+          lineOpacity: _featureOpacityExpression('opacity'),
           lineCap: 'round',
           lineJoin: 'round',
         ),
@@ -555,24 +843,18 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
         ml.CircleLayerProperties(
           circleColor: ['get', 'color'],
           circleRadius: ['get', 'radius'],
-          circleOpacity: [
-            '*',
-            [
-              'coalesce',
-              ['get', 'opacity'],
-              1,
-            ],
-            factor,
-          ],
+          circleOpacity: _featureOpacityExpression('opacity'),
           circleStrokeColor: '#FFFFFF',
           circleStrokeWidth: 1.5,
-          circleStrokeOpacity: factor,
+          circleStrokeOpacity: _featureOpacityExpression('opacity'),
         ),
       );
     } catch (error) {
-      debugPrint('Gagal memperbarui transparansi layer peta: $error');
+      debugPrint('Gagal memperbarui gaya layer peta: $error');
     }
   }
+
+  Future<void> _applyKmlLayerOpacity() => _updateLayerStyles();
 
   void _scheduleKmlLayerOpacityUpdate(double value) {
     setState(() => _opacity = value);
@@ -642,6 +924,8 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
   }
 
   void _onCameraMove(ml.CameraPosition camera) {
+    final center = LatLng(camera.target.latitude, camera.target.longitude);
+    _center = center;
     final now = DateTime.now();
     if (_lastCoordinateUpdate != null &&
         now.difference(_lastCoordinateUpdate!) <
@@ -649,10 +933,7 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
       return;
     }
     _lastCoordinateUpdate = now;
-    _coordinateNotifier.value = LatLng(
-      camera.target.latitude,
-      camera.target.longitude,
-    );
+    _coordinateNotifier.value = center;
   }
 
   // ==========================================
@@ -776,7 +1057,13 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
                       featureTapsTriggersMapClick: true,
 
                       onMapClick: (point, coordinates) {
-                        unawaited(_handleWaypointMapClick(point));
+                        if (_isMeasuring) {
+                          _addMeasurePoint(
+                            LatLng(coordinates.latitude, coordinates.longitude),
+                          );
+                        } else {
+                          unawaited(_handleWaypointMapClick(point));
+                        }
                       },
                     )
                   else
@@ -788,6 +1075,14 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
 
                   // 2) Crosshair di tengah
                   const IgnorePointer(child: Center(child: Crosshair())),
+
+                  if (_isMeasuring)
+                    Positioned(
+                      left: 12,
+                      right: 12,
+                      bottom: MediaQuery.paddingOf(context).bottom + 12,
+                      child: _buildMeasureOverlay(),
+                    ),
 
                   if (_selectedWaypoint != null && _tooltipPosition != null)
                     Positioned.fill(
@@ -868,21 +1163,22 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
                     ),
 
                   // 3) GPS overlay (kanan bawah)
-                  Positioned(
-                    right: 12,
-                    bottom: 12,
-                    child: ValueListenableBuilder<double?>(
-                      valueListenable: _compassHeading,
-                      builder: (context, heading, _) => GpsOverlay(
-                        onTap: _centerOnGps,
-                        onLongPress: _stopGps,
-                        status: _gpsStatus,
-                        accuracy: _gpsPosition?.accuracy,
-                        heading: heading,
-                        loading: _gpsBusy,
+                  if (!_isMeasuring)
+                    Positioned(
+                      right: 12,
+                      bottom: 12,
+                      child: ValueListenableBuilder<double?>(
+                        valueListenable: _compassHeading,
+                        builder: (context, heading, _) => GpsOverlay(
+                          onTap: _centerOnGps,
+                          onLongPress: _stopGps,
+                          status: _gpsStatus,
+                          accuracy: _gpsPosition?.accuracy,
+                          heading: heading,
+                          loading: _gpsBusy,
+                        ),
                       ),
                     ),
-                  ),
 
                   // 4) Active layers overlay (kiri atas)
                   Positioned(
@@ -894,31 +1190,33 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
                         ...activeMaps.map((map) => map.name),
                         if (_activeBasemap != null) _activeBasemap!.label,
                       ],
-                      onLayerTap: _zoomToLayerByName,
+                      onLayerTap: _openLayerSettings,
                     ),
                   ),
 
                   // 5) Opacity control (kanan bawah atas GPS)
-                  Positioned(
-                    right: 12,
-                    bottom: 56,
-                    child: OpacityControl(
-                      expanded: _showOpacityPanel,
-                      value: _opacity,
-                      onToggle: () => setState(
-                        () => _showOpacityPanel = !_showOpacityPanel,
+                  if (!_isMeasuring)
+                    Positioned(
+                      right: 12,
+                      bottom: 56,
+                      child: OpacityControl(
+                        expanded: _showOpacityPanel,
+                        value: _opacity,
+                        onToggle: () => setState(
+                          () => _showOpacityPanel = !_showOpacityPanel,
+                        ),
+                        onChanged: _scheduleKmlLayerOpacityUpdate,
                       ),
-                      onChanged: _scheduleKmlLayerOpacityUpdate,
                     ),
-                  ),
 
-                  Positioned(
-                    left: 8,
-                    bottom: 4,
-                    child: MapAttribution(
-                      attribution: _activeBasemap?.attribution,
+                  if (!_isMeasuring)
+                    Positioned(
+                      left: 8,
+                      bottom: 4,
+                      child: MapAttribution(
+                        attribution: _activeBasemap?.attribution,
+                      ),
                     ),
-                  ),
 
                   if (_showToolsPopup)
                     Positioned(
@@ -929,9 +1227,9 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
                       right: 8,
                       child: ToolsPopup(
                         onClose: () => setState(() => _showToolsPopup = false),
-                        onFindByCoordinate: _closeToolsPopup,
+                        onFindByCoordinate: _onFindByCoordinatePressed,
                         onRecordTrack: _closeToolsPopup,
-                        onMeasure: _closeToolsPopup,
+                        onMeasure: _startMeasuring,
                         onMapFeatures: _closeToolsPopup,
                         onSettings: _closeToolsPopup,
                       ),
@@ -989,6 +1287,19 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
 
   void _closeToolsPopup() {
     setState(() => _showToolsPopup = false);
+  }
+
+  Future<void> _onFindByCoordinatePressed() async {
+    _closeToolsPopup();
+    final coordinate = await CoordinateSearchDialog.show(context);
+    if (coordinate == null || !mounted) return;
+
+    await _mapController?.animateCamera(
+      ml.CameraUpdate.newLatLngZoom(
+        ml.LatLng(coordinate.latitude, coordinate.longitude),
+        16,
+      ),
+    );
   }
 
   // ==========================================
