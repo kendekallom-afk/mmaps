@@ -635,10 +635,22 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
               runSpacing: 4,
               children: [
                 FilledButton.tonalIcon(
-                onPressed: () => _addMeasurePoint(
-                _center,
-                source: 'TOMBOL_TAMBAH',
-                  ),
+                onPressed: () {
+                debugPrint('[MEASURE TEST] TOMBOL DITEKAN');
+
+                final camera = _mapController?.cameraPosition;
+                final point = camera != null
+                    ? LatLng(
+                        camera.target.latitude,
+                        camera.target.longitude,
+                      )
+                    : _center;
+
+                _addMeasurePoint(
+                  point,
+                  source: 'TOMBOL_TAMBAH',
+                );
+                },
                 icon: const Icon(Icons.add),
                  label: const Text('Tambah'),
                 ),
@@ -1070,14 +1082,9 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
                       featureTapsTriggersMapClick: true,
 
                       onMapClick: (point, coordinates) {
-                      if (_isMeasuring) {
-                        _addMeasurePoint(
-                            LatLng(coordinates.latitude, coordinates.longitude),
-                            source: 'KLIK_PETA',
-                          );
-                        } else {
-                          unawaited(_handleWaypointMapClick(point));
-                        }
+                        if (_isMeasuring) return;
+
+                        unawaited(_handleWaypointMapClick(point));
                       },
                     )
                   else
