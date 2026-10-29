@@ -79,7 +79,7 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
   static const String _puckLayerId = 'user-puck-layer';
 
   // Tes isolasi: false = gunakan puck native MapLibre saja.
-  static const bool _useCustomPuck = false;
+  static const bool _useCustomPuck = true;
 
   // Measurement sources and layers
   static const String _measureLineSourceId = 'measure-line-source';
@@ -1207,21 +1207,13 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
                         zoom: _zoom,
                       ),
                       trackCameraPosition: true,
-                      myLocationEnabled: _gpsActive,
+                      myLocationEnabled: false, // Gunakan puck panah khusus mMaps, bukan puck native.
                       myLocationTrackingMode: ml.MyLocationTrackingMode.none,
                       myLocationRenderMode: ml.MyLocationRenderMode.normal,
                       onMapCreated: _onMapCreated,
                       onStyleLoadedCallback: _onStyleLoaded,
                       onCameraIdle: _onCameraIdle,
                       onCameraMove: _onCameraMove,
-                      
-                      onUserLocationUpdated: (location) {
-                        debugPrint(
-                          '[NATIVE PUCK] Lokasi MapLibre diterima: '
-                          '${location.position}',
-                        );
-                      },
-
 
                       // Aktifkan klik peta ketika marker ditekan.
                       featureTapsTriggersMapClick: true,
