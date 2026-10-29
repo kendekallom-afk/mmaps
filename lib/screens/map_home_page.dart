@@ -106,6 +106,7 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
   final Map<String, double> _layerOpacities = {};
   final Map<String, bool> _layerOutlines = {};
   bool _isMeasuring = false;
+  bool _isMeasurePolygonClosed = false;
   List<LatLng> _measurePoints = [];
 
   // State waypoints
@@ -282,6 +283,7 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
 
   /// Dipanggil otomatis setelah style JSON selesai dimuat oleh engine MapLibre
   void _onStyleLoaded() {
+    debugPrint('[STYLE DEBUG] onStyleLoaded dipanggil');
     unawaited(_initializeMapStyle());
   }
 
@@ -306,9 +308,24 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
         'assets/images/location_puck.png',
       );
       if (!_isCurrentStyleController(controller)) return;
-      final Uint8List bytes = data.buffer.asUint8List();
-      await controller.addImage('puck-icon', bytes);
-      if (!_isCurrentStyleController(controller)) return;
+      final Uint8List bytes = data.buffer.asUint8List(
+        data.offsetInBytes,
+        data.lengthInBytes,
+      );
+      
+        debugPrint('[PUCK IMAGE] Mulai memuat ikon, ukuran: ${bytes.length} bytes');
+
+        try {
+          await controller.addImage('puck-icon', bytes);
+          debugPrint('[PUCK IMAGE] addImage berhasil');
+        } catch (e, st) {
+          debugPrint('[PUCK IMAGE] addImage GAGAL: $e');
+          debugPrint('$st');
+          rethrow;
+        }
+
+        if (!_isCurrentStyleController(controller)) return;
+
 
       // 3. Tambahkan source dan layer puck
       await controller.addGeoJsonSource(_puckSourceId, {
@@ -316,17 +333,19 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
         "features": [],
       });
       if (!_isCurrentStyleController(controller)) return;
+      debugPrint('[PUCK LAYER] Mulai membuat layer');
       await controller.addSymbolLayer(
         _puckSourceId,
         _puckLayerId,
         const ml.SymbolLayerProperties(
           iconImage: 'puck-icon',
-          iconSize: 0.5,
+          iconSize: 2.0,
           iconRotate: ['get', 'heading'],
           iconAllowOverlap: true,
           iconIgnorePlacement: true,
         ),
       );
+      debugPrint('[PUCK LAYER] Layer berhasil dibuat');
       if (!_isCurrentStyleController(controller)) return;
 
       // 4. Update posisi puck setelah sourcenya tersedia.
@@ -440,6 +459,7 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
   }
 
   Map<String, dynamic> _measureFillGeoJson() {
+    // Area ditampilkan sejak ada 3 titik, meskipun polygon belum ditutup.
     if (_measurePoints.length < 3) {
       return {'type': 'FeatureCollection', 'features': <dynamic>[]};
     }
@@ -447,6 +467,7 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
     final ring = _measurePoints
         .map((point) => [point.longitude, point.latitude])
         .toList();
+    // Penutupan hanya untuk geometri, bukan menambah titik ke daftar.
     ring.add(ring.first);
     return {
       'type': 'FeatureCollection',
@@ -463,23 +484,33 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
     };
   }
 
-  Map<String, dynamic> _measureLineGeoJson() => {
-    'type': 'FeatureCollection',
-    'features': _measurePoints.length < 2
-        ? <dynamic>[]
-        : [
-            {
-              'type': 'Feature',
-              'geometry': {
-                'type': 'LineString',
-                'coordinates': _measurePoints
-                    .map((point) => [point.longitude, point.latitude])
-                    .toList(),
-              },
-              'properties': const {},
-            },
-          ],
-  };
+  Map<String, dynamic> _measureLineGeoJson() {
+    if (_measurePoints.length < 2) {
+      return {'type': 'FeatureCollection', 'features': <dynamic>[]};
+    }
+
+    final coordinates = _measurePoints
+        .map((point) => [point.longitude, point.latitude])
+        .toList();
+    // Saat polygon tertutup, garis batas juga menampilkan sisi penutup.
+    if (_isMeasurePolygonClosed) {
+      coordinates.add(coordinates.first);
+    }
+
+    return {
+      'type': 'FeatureCollection',
+      'features': [
+        {
+          'type': 'Feature',
+          'geometry': {
+            'type': 'LineString',
+            'coordinates': coordinates,
+          },
+          'properties': const {},
+        },
+      ],
+    };
+  }
 
   Map<String, dynamic> _measurePointsGeoJson() => {
     'type': 'FeatureCollection',
@@ -523,7 +554,7 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
       Object error,
       StackTrace stackTrace,
     ) {
-      debugPrint('Gagal memperbarui layer ukur: $error\n$stackTrace');
+      debugPrint('Gagal memperbarui layer ukur: $error\\n$stackTrace');
     });
     return _measureUpdateQueue;
   }
@@ -532,52 +563,72 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
     setState(() {
       _showToolsPopup = false;
       _isMeasuring = true;
+      _isMeasurePolygonClosed = false;
       _measurePoints = [];
     });
     unawaited(_updateMeasureLayers());
   }
 
   void _addMeasurePoint(LatLng point, {required String source}) {
-  if (!_isMeasuring) return;
+    if (!_isMeasuring || _isMeasurePolygonClosed) return;
 
-  setState(() {
-    _measurePoints = [..._measurePoints, point];
-  });
+    setState(() {
+      _measurePoints = [..._measurePoints, point];
+    });
 
-  debugPrint(
-    '[MEASURE] sumber=$source | '
-    'jumlah=${_measurePoints.length} | '
-    'lat=${point.latitude} | lng=${point.longitude}',
-  );
+    debugPrint(
+      '[MEASURE] sumber=$source | '
+      'jumlah=${_measurePoints.length} | '
+      'lat=${point.latitude} | lng=${point.longitude}',
+    );
 
-  unawaited(_updateMeasureLayers());
-}
+    unawaited(_updateMeasureLayers());
+  }
+
+  void _closeMeasurePolygon() {
+    if (!_isMeasuring || _isMeasurePolygonClosed || _measurePoints.length < 3) {
+      return;
+    }
+    setState(() => _isMeasurePolygonClosed = true);
+    unawaited(_updateMeasureLayers());
+  }
 
   void _undoMeasurePoint() {
+    if (_isMeasurePolygonClosed) {
+      // Tekan "−" pertama setelah polygon tertutup: buka kembali menjadi garis.
+      setState(() => _isMeasurePolygonClosed = false);
+      unawaited(_updateMeasureLayers());
+      return;
+    }
     if (_measurePoints.isEmpty) return;
-    setState(
-      () =>
-          _measurePoints = _measurePoints.sublist(0, _measurePoints.length - 1),
-    );
+    setState(() {
+      _measurePoints = _measurePoints.sublist(0, _measurePoints.length - 1);
+    });
     unawaited(_updateMeasureLayers());
   }
 
   void _clearMeasurePoints() {
-    if (_measurePoints.isEmpty) return;
-    setState(() => _measurePoints = []);
+    setState(() {
+      _measurePoints = [];
+      _isMeasurePolygonClosed = false;
+    });
     unawaited(_updateMeasureLayers());
   }
 
   void _finishMeasuring() {
     setState(() {
       _isMeasuring = false;
+      _isMeasurePolygonClosed = false;
       _measurePoints = [];
     });
     unawaited(_updateMeasureLayers());
   }
 
   String _formatMeasureDistance() {
-    final meters = MeasureCalculator.distanceMeters(_measurePoints);
+    final points = _isMeasurePolygonClosed && _measurePoints.length >= 3
+        ? [..._measurePoints, _measurePoints.first]
+        : _measurePoints;
+    final meters = MeasureCalculator.distanceMeters(points);
     return meters >= 1000
         ? '${(meters / 1000).toStringAsFixed(2)} km'
         : '${meters.toStringAsFixed(0)} m';
@@ -585,18 +636,80 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
 
   String _formatMeasureArea() {
     final squareMeters = MeasureCalculator.areaSquareMeters(_measurePoints);
-    return squareMeters >= 1000000
-        ? '${(squareMeters / 1000000).toStringAsFixed(2)} km²'
+    return squareMeters >= 10000
+        ? '${(squareMeters / 10000).toStringAsFixed(2)} ha'
         : '${squareMeters.toStringAsFixed(0)} m²';
   }
 
   Widget _buildMeasureOverlay() {
     final theme = Theme.of(context);
+
+    Widget circleButton({
+      required IconData icon,
+      required String tooltip,
+      required VoidCallback? onPressed,
+    }) {
+      return Container(
+        width: 48,
+        height: 48,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: Colors.black.withValues(alpha: 0.45),
+          border: Border.all(color: Colors.white, width: 1.5),
+        ),
+        child: IconButton(
+          onPressed: onPressed,
+          tooltip: tooltip,
+          icon: Icon(icon, size: 24, color: Colors.white),
+          style: IconButton.styleFrom(
+            shape: const CircleBorder(),
+            padding: EdgeInsets.zero,
+            backgroundColor: Colors.transparent,
+            disabledForegroundColor: Colors.white54,
+          ),
+        ),
+      );
+    }
+
+    Widget symbolButton({
+      required String symbol,
+      required String tooltip,
+      required VoidCallback? onPressed,
+    }) {
+      return Container(
+        width: 48,
+        height: 48,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: Colors.black.withValues(alpha: 0.45),
+          border: Border.all(color: Colors.white, width: 1.5),
+        ),
+        child: IconButton(
+          onPressed: onPressed,
+          tooltip: tooltip,
+          icon: Text(
+            symbol,
+            style: const TextStyle(
+              fontSize: 25,
+              fontWeight: FontWeight.w600,
+              color: Colors.white,
+            ),
+          ),
+          style: IconButton.styleFrom(
+            shape: const CircleBorder(),
+            padding: EdgeInsets.zero,
+            backgroundColor: Colors.transparent,
+            disabledForegroundColor: Colors.white54,
+          ),
+        ),
+      );
+    }
+
     return Material(
       color: Colors.black.withValues(alpha: 0.82),
-      borderRadius: BorderRadius.circular(14),
+      borderRadius: BorderRadius.circular(18),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -606,7 +719,7 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
               runSpacing: 4,
               children: [
                 Text(
-                  'Jarak: ${_formatMeasureDistance()}',
+                  '${_isMeasurePolygonClosed ? 'Keliling' : 'Jarak'}: ${_formatMeasureDistance()}',
                   style: theme.textTheme.bodyMedium?.copyWith(
                     color: Colors.white,
                     fontWeight: FontWeight.w600,
@@ -614,7 +727,7 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
                 ),
                 if (_measurePoints.length >= 3)
                   Text(
-                    'Luas: ${_formatMeasureArea()}',
+                    '${_isMeasurePolygonClosed ? 'Luas' : 'Luas sementara'}: ${_formatMeasureArea()}',
                     style: theme.textTheme.bodyMedium?.copyWith(
                       color: Colors.white,
                       fontWeight: FontWeight.w600,
@@ -628,48 +741,59 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
                 ),
               ],
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 12),
             Wrap(
               alignment: WrapAlignment.center,
+              crossAxisAlignment: WrapCrossAlignment.center,
               spacing: 8,
-              runSpacing: 4,
+              runSpacing: 8,
               children: [
-                FilledButton.tonalIcon(
-                onPressed: () {
-                debugPrint('[MEASURE TEST] TOMBOL DITEKAN');
-
-                final camera = _mapController?.cameraPosition;
-                final point = camera != null
-                    ? LatLng(
-                        camera.target.latitude,
-                        camera.target.longitude,
-                      )
-                    : _center;
-
-                _addMeasurePoint(
-                  point,
-                  source: 'TOMBOL_TAMBAH',
-                );
-                },
-                icon: const Icon(Icons.add),
-                 label: const Text('Tambah'),
+                // Simpan disiapkan untuk tahap berikutnya.
+                circleButton(
+                  icon: Icons.save_outlined,
+                  tooltip: 'Simpan (segera hadir)',
+                  onPressed: null,
                 ),
-                OutlinedButton.icon(
-                  onPressed: _measurePoints.isEmpty ? null : _undoMeasurePoint,
-                  icon: const Icon(Icons.undo),
-                  label: const Text('Undo'),
+                circleButton(
+                  icon: Icons.close,
+                  tooltip: 'Selesai dan hapus pengukuran',
+                  onPressed: _finishMeasuring,
                 ),
-                OutlinedButton.icon(
+                const SizedBox(width: 12),
+                symbolButton(
+                  symbol: '=',
+                  tooltip: 'Tutup menjadi polygon',
+                  onPressed: !_isMeasurePolygonClosed && _measurePoints.length >= 3
+                      ? _closeMeasurePolygon
+                      : null,
+                ),
+                symbolButton(
+                  symbol: '−',
+                  tooltip: _isMeasurePolygonClosed
+                      ? 'Buka kembali polygon'
+                      : 'Hapus titik terakhir',
                   onPressed: _measurePoints.isEmpty
                       ? null
-                      : _clearMeasurePoints,
-                  icon: const Icon(Icons.delete_outline),
-                  label: const Text('Clear'),
+                      : _undoMeasurePoint,
                 ),
-                FilledButton.icon(
-                  onPressed: _finishMeasuring,
-                  icon: const Icon(Icons.check),
-                  label: const Text('Selesai'),
+                symbolButton(
+                  symbol: '+',
+                  tooltip: 'Tambah titik di tengah peta',
+                  onPressed: _isMeasurePolygonClosed
+                      ? null
+                      : () {
+                          final camera = _mapController?.cameraPosition;
+                          final point = camera != null
+                              ? LatLng(
+                                  camera.target.latitude,
+                                  camera.target.longitude,
+                                )
+                              : _center;
+                          _addMeasurePoint(
+                            point,
+                            source: 'TOMBOL_TAMBAH',
+                          );
+                        },
                 ),
               ],
             ),
@@ -679,7 +803,7 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
     );
   }
 
-  Future<void> _openLayerSettings(String layerName) async {
+    Future<void> _openLayerSettings(String layerName) async {
     ImportedMap? selectedMap;
     for (final map in _importedMaps) {
       if (map.isActive && map.name == layerName) {
@@ -914,6 +1038,9 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
     final heading = _compassHeading.value ?? 0.0;
 
     try {
+      debugPrint(
+      '[PUCK DEBUG] lat=$lat, lon=$lon, heading=$heading',
+      );
       await _mapController!.setGeoJsonSource(_puckSourceId, {
         "type": "FeatureCollection",
         "features": [
@@ -927,6 +1054,7 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
           },
         ],
       });
+      debugPrint('[PUCK SOURCE] GeoJSON berhasil diperbarui');
     } catch (e) {
       debugPrint('Gagal memperbarui puck: $e');
     }
@@ -1070,13 +1198,21 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
                         zoom: _zoom,
                       ),
                       trackCameraPosition: true,
-                      myLocationEnabled: false,
+                      myLocationEnabled: _gpsActive,
                       myLocationTrackingMode: ml.MyLocationTrackingMode.none,
                       myLocationRenderMode: ml.MyLocationRenderMode.normal,
                       onMapCreated: _onMapCreated,
                       onStyleLoadedCallback: _onStyleLoaded,
                       onCameraIdle: _onCameraIdle,
                       onCameraMove: _onCameraMove,
+                      
+                      onUserLocationUpdated: (location) {
+                        debugPrint(
+                          '[NATIVE PUCK] Lokasi MapLibre diterima: '
+                          '${location.position}',
+                        );
+                      },
+
 
                       // Aktifkan klik peta ketika marker ditekan.
                       featureTapsTriggersMapClick: true,
