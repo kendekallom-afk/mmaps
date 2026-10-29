@@ -78,6 +78,9 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
   static const String _puckSourceId = 'user-puck-source';
   static const String _puckLayerId = 'user-puck-layer';
 
+  // Tes isolasi: false = gunakan puck native MapLibre saja.
+  static const bool _useCustomPuck = false;
+
   // Measurement sources and layers
   static const String _measureLineSourceId = 'measure-line-source';
   static const String _measureLineLayerId = 'measure-line-layer';
@@ -257,6 +260,7 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
     _resumeGpsOnForeground = false;
     await _cancelGpsStreams();
 
+    if (!_useCustomPuck) return;
     final controller = _mapController;
     if (controller == null || !_isStyleLoaded) return;
     try {
@@ -303,54 +307,58 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
       await _initializeMeasureLayers(controller);
       if (!_isCurrentStyleController(controller)) return;
 
-      // 2. Tambahkan gambar puck
-      final ByteData data = await rootBundle.load(
-        'assets/images/location_puck.png',
-      );
-      if (!_isCurrentStyleController(controller)) return;
-      final Uint8List bytes = data.buffer.asUint8List(
-        data.offsetInBytes,
-        data.lengthInBytes,
-      );
-      
-        debugPrint('[PUCK IMAGE] Mulai memuat ikon, ukuran: ${bytes.length} bytes');
-
-        try {
-          await controller.addImage('puck-icon', bytes);
-          debugPrint('[PUCK IMAGE] addImage berhasil');
-        } catch (e, st) {
-          debugPrint('[PUCK IMAGE] addImage GAGAL: $e');
-          debugPrint('$st');
-          rethrow;
-        }
-
+      // Tes isolasi puck: nonaktifkan aset/source/layer buatan sementara.
+      if (_useCustomPuck) {
+        // 2. Tambahkan gambar puck
+        final ByteData data = await rootBundle.load(
+          'assets/images/location_puck.png',
+        );
         if (!_isCurrentStyleController(controller)) return;
-
-
-      // 3. Tambahkan source dan layer puck
-      await controller.addGeoJsonSource(_puckSourceId, {
-        "type": "FeatureCollection",
-        "features": [],
-      });
-      if (!_isCurrentStyleController(controller)) return;
-      debugPrint('[PUCK LAYER] Mulai membuat layer');
-      await controller.addSymbolLayer(
-        _puckSourceId,
-        _puckLayerId,
-        const ml.SymbolLayerProperties(
-          iconImage: 'puck-icon',
-          iconSize: 2.0,
-          iconRotate: ['get', 'heading'],
-          iconAllowOverlap: true,
-          iconIgnorePlacement: true,
-        ),
-      );
-      debugPrint('[PUCK LAYER] Layer berhasil dibuat');
-      if (!_isCurrentStyleController(controller)) return;
-
-      // 4. Update posisi puck setelah sourcenya tersedia.
-      await _updateUserPuck();
-      if (!_isCurrentStyleController(controller)) return;
+        final Uint8List bytes = data.buffer.asUint8List(
+          data.offsetInBytes,
+          data.lengthInBytes,
+        );
+        
+          debugPrint('[PUCK IMAGE] Mulai memuat ikon, ukuran: ${bytes.length} bytes');
+  
+          try {
+            await controller.addImage('puck-icon', bytes);
+            debugPrint('[PUCK IMAGE] addImage berhasil');
+          } catch (e, st) {
+            debugPrint('[PUCK IMAGE] addImage GAGAL: $e');
+            debugPrint('$st');
+            rethrow;
+          }
+  
+          if (!_isCurrentStyleController(controller)) return;
+  
+  
+        // 3. Tambahkan source dan layer puck
+        await controller.addGeoJsonSource(_puckSourceId, {
+          "type": "FeatureCollection",
+          "features": [],
+        });
+        if (!_isCurrentStyleController(controller)) return;
+        debugPrint('[PUCK LAYER] Mulai membuat layer');
+        await controller.addSymbolLayer(
+          _puckSourceId,
+          _puckLayerId,
+          const ml.SymbolLayerProperties(
+            iconImage: 'puck-icon',
+            iconSize: 2.0,
+            iconRotate: ['get', 'heading'],
+            iconAllowOverlap: true,
+            iconIgnorePlacement: true,
+          ),
+        );
+        debugPrint('[PUCK LAYER] Layer berhasil dibuat');
+        if (!_isCurrentStyleController(controller)) return;
+  
+        // 4. Update posisi puck setelah sourcenya tersedia.
+        await _updateUserPuck();
+        if (!_isCurrentStyleController(controller)) return;
+  
+        }
 
       // 5. Tambahkan source dan layer untuk waypoints
       await controller.addGeoJsonSource(
@@ -1029,6 +1037,7 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
   }
 
   Future<void> _updateUserPuck() async {
+    if (!_useCustomPuck) return;
     if (_mapController == null || !_isStyleLoaded || _gpsPosition == null) {
       return;
     }
