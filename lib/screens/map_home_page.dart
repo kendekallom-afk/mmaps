@@ -851,11 +851,30 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
         identical(_mapController, controller) && _isStyleLoaded;
 
     final activeMaps = _importedMaps.where((map) => map.isActive).toList();
+
+    // Ukur biaya pembentukan GeoJSON secara terpisah dari komunikasi MapLibre.
+    final geoJsonStopwatch = Stopwatch()..start();
     final geoJsonData = GeoJsonHelper.fromImportedMaps(
       activeMaps,
       layerOpacities: _layerOpacities,
       layerOutlines: _layerOutlines,
     );
+    geoJsonStopwatch.stop();
+
+    final polygonCount =
+        (geoJsonData.polygons['features'] as List?)?.length ?? 0;
+    final lineCount =
+        (geoJsonData.lines['features'] as List?)?.length ?? 0;
+    final pointCount =
+        (geoJsonData.points['features'] as List?)?.length ?? 0;
+
+    debugPrint(
+      '[KMZ PERF] GeoJSON build: ${geoJsonStopwatch.elapsedMilliseconds} ms | '
+      'peta aktif: ${activeMaps.length} | poligon: $polygonCount | '
+      'garis: $lineCount | titik: $pointCount',
+    );
+
+    final sourceStopwatch = Stopwatch()..start();
 
     try {
       if (!_layersInitialized) {
@@ -922,17 +941,34 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
         _layersInitialized = true;
         await _updateLayerStyles();
       } else {
-        // Jika layer sudah ada, perbarui data GeoJSON secara instan
+        // Ukur pembaruan setiap source; ketiganya masih berurutan agar aman.
+        var sourceTimer = Stopwatch()..start();
         await controller.setGeoJsonSource(_polySourceId, geoJsonData.polygons);
+        sourceTimer.stop();
+        debugPrint('[KMZ PERF] Source poligon: ${sourceTimer.elapsedMilliseconds} ms');
         if (!isCurrentController()) return;
+
+        sourceTimer = Stopwatch()..start();
         await controller.setGeoJsonSource(_lineSourceId, geoJsonData.lines);
+        sourceTimer.stop();
+        debugPrint('[KMZ PERF] Source garis: ${sourceTimer.elapsedMilliseconds} ms');
         if (!isCurrentController()) return;
+
+        sourceTimer = Stopwatch()..start();
         await controller.setGeoJsonSource(_pointSourceId, geoJsonData.points);
+        sourceTimer.stop();
+        debugPrint('[KMZ PERF] Source titik: ${sourceTimer.elapsedMilliseconds} ms');
         if (!isCurrentController()) return;
         await _updateLayerStyles();
       }
     } catch (e) {
       debugPrint('Error updating map layers: $e');
+    } finally {
+      sourceStopwatch.stop();
+      debugPrint(
+        '[KMZ PERF] Total sinkronisasi source: '
+        '${sourceStopwatch.elapsedMilliseconds} ms',
+      );
     }
   }
 
@@ -1928,18 +1964,26 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
       }
     }
 
+    if (activate && mounted) {
+      // Kembali ke tampilan peta lebih dahulu. Sinkronisasi GeoJSON berjalan
+      // melalui antrean yang sama di belakang layar, tanpa menahan navigasi UI.
+      setState(() {
+        _showLayersView = false;
+        _showToolsPopup = false;
+      });
+      if (_isStyleLoaded) {
+        unawaited(_syncMapLayers());
+      }
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted) return;
+      _fitMapToImportedMap(targetMap);
+      return;
+    }
+
+    // Saat menonaktifkan layer, tampilan library tetap terbuka.
     if (_isStyleLoaded) {
       await _syncMapLayers();
     }
-
-    if (!activate || !mounted) return;
-    setState(() {
-      _showLayersView = false;
-      _showToolsPopup = false;
-    });
-    await WidgetsBinding.instance.endOfFrame;
-    if (!mounted) return;
-    _fitMapToImportedMap(targetMap);
   }
 
   Future<void> _removeMap(ImportedMap map) async {
