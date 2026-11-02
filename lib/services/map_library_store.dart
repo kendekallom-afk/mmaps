@@ -43,6 +43,14 @@ abstract final class MapLibraryStore {
     String content,
   ) => backend.writeGeoJson(id, geometry, content);
 
+  /// Reads the per-map MapLibre layer style JSON.
+  static Future<String> readLayerStyle(String id) =>
+      backend.readLayerStyle(id);
+
+  /// Writes a per-map MapLibre layer style JSON object.
+  static Future<void> writeLayerStyle(String id, String content) =>
+      backend.writeLayerStyle(id, content);
+
   /// Reads active IDs and reports valid IDs whose map folders are missing.
   static Future<MapLibraryActiveIndex> readActiveMapIndex() =>
       backend.readActiveMapIndex();
