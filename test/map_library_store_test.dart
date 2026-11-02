@@ -30,12 +30,13 @@ void main() {
   MapMeta sampleMeta({
     String id = 'map_001',
     String name = 'Peta Uji',
+    String extension = 'kmz',
   }) =>
       MapMeta(
         id: id,
         formatVersion: MapMeta.currentFormatVersion,
         name: name,
-        originalExtension: 'kmz',
+        originalExtension: extension,
         importedAt: DateTime.utc(2026, 10, 1),
         polygonCount: 3,
         lineCount: 2,
@@ -220,7 +221,7 @@ void main() {
       await Directory(p.join(libraryDirectory.path, 'map_001'))
           .create(recursive: true);
       await MapLibraryStore.writeMeta(
-        sampleMeta().copyWith(originalExtension: 'kml'),
+        sampleMeta(extension: 'kml'),
       );
       const source = '<kml><Document/></kml>';
 
