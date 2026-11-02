@@ -39,6 +39,16 @@ Future<void> _installTemporaryFile(File temporary, File target) async {
   }
 }
 
+/// Rejects symbolic links at known file paths inside a map folder.
+/// Map-library files are expected to be regular files, not redirects to paths
+/// elsewhere on the device.
+Future<void> _rejectSymbolicLink(String path) async {
+  final type = await FileSystemEntity.type(path, followLinks: false);
+  if (type == FileSystemEntityType.link) {
+    throw FileSystemException('Symbolic links are not allowed in map folders', path);
+  }
+}
+
 Future<Directory> _rootDirectory() async {
   final support = await getApplicationSupportDirectory();
   return Directory(p.join(support.path, 'maps_library'));
@@ -121,7 +131,9 @@ Future<MapMeta> readMeta(String id) async {
     throw StateError('Map folder not found: $id');
   }
 
-  final file = File(p.join(mapPath, 'meta.json'));
+  final filePath = p.join(mapPath, 'meta.json');
+  await _rejectSymbolicLink(filePath);
+  final file = File(filePath);
   if (!await file.exists()) {
     throw StateError('meta.json not found for map: $id');
   }
@@ -146,8 +158,12 @@ Future<void> writeMeta(MapMeta meta) async {
     );
   }
 
-  final target = File(p.join(mapPath, 'meta.json'));
-  final temporary = File(p.join(mapPath, 'meta.json.tmp'));
+  final targetPath = p.join(mapPath, 'meta.json');
+  final temporaryPath = p.join(mapPath, 'meta.json.tmp');
+  await _rejectSymbolicLink(targetPath);
+  await _rejectSymbolicLink(temporaryPath);
+  final target = File(targetPath);
+  final temporary = File(temporaryPath);
   final backup = File(
     p.join(mapPath, 'meta.json.backup-${DateTime.now().microsecondsSinceEpoch}'),
   );
@@ -190,7 +206,9 @@ Future<List<int>> readOriginalSource(String id) async {
   if (extension != 'kml' && extension != 'kmz') {
     throw FormatException('Unsupported original source extension: $extension');
   }
-  final file = File(p.join(mapPath, 'original.$extension'));
+  final filePath = p.join(mapPath, 'original.$extension');
+  await _rejectSymbolicLink(filePath);
+  final file = File(filePath);
   if (!await file.exists()) {
     throw StateError('Original source not found for map: $id');
   }
@@ -209,8 +227,12 @@ Future<void> writeOriginalSource(String id, List<int> bytes) async {
     throw FormatException('Unsupported original source extension: $extension');
   }
 
-  final target = File(p.join(mapPath, 'original.$extension'));
-  final temporary = File(p.join(mapPath, 'original.$extension.tmp'));
+  final targetPath = p.join(mapPath, 'original.$extension');
+  final temporaryPath = p.join(mapPath, 'original.$extension.tmp');
+  await _rejectSymbolicLink(targetPath);
+  await _rejectSymbolicLink(temporaryPath);
+  final target = File(targetPath);
+  final temporary = File(temporaryPath);
   await temporary.writeAsBytes(bytes, flush: true);
   await _installTemporaryFile(temporary, target);
 }
@@ -246,7 +268,9 @@ Future<String> readGeoJson(String id, String geometry) async {
   if (!await Directory(mapPath).exists()) {
     throw StateError('Map folder not found: $id');
   }
-  final file = File(p.join(mapPath, fileName));
+  final filePath = p.join(mapPath, fileName);
+  await _rejectSymbolicLink(filePath);
+  final file = File(filePath);
   if (!await file.exists()) {
     throw StateError('$fileName not found for map: $id');
   }
@@ -262,8 +286,12 @@ Future<void> writeGeoJson(String id, String geometry, String content) async {
     throw StateError('Map folder does not exist: $id');
   }
   _validateFeatureCollection(content);
-  final target = File(p.join(mapPath, fileName));
-  final temporary = File(p.join(mapPath, '$fileName.tmp'));
+  final targetPath = p.join(mapPath, fileName);
+  final temporaryPath = p.join(mapPath, '$fileName.tmp');
+  await _rejectSymbolicLink(targetPath);
+  await _rejectSymbolicLink(temporaryPath);
+  final target = File(targetPath);
+  final temporary = File(temporaryPath);
   await temporary.writeAsString(content, flush: true);
   await _installTemporaryFile(temporary, target);
 }
@@ -281,7 +309,9 @@ Future<String> readLayerStyle(String id) async {
   if (!await Directory(mapPath).exists()) {
     throw StateError('Map folder not found: $id');
   }
-  final file = File(p.join(mapPath, 'layer_style.json'));
+  final filePath = p.join(mapPath, 'layer_style.json');
+  await _rejectSymbolicLink(filePath);
+  final file = File(filePath);
   if (!await file.exists()) {
     throw StateError('layer_style.json not found for map: $id');
   }
@@ -296,8 +326,12 @@ Future<void> writeLayerStyle(String id, String content) async {
     throw StateError('Map folder does not exist: $id');
   }
   _validateLayerStyle(content);
-  final target = File(p.join(mapPath, 'layer_style.json'));
-  final temporary = File(p.join(mapPath, 'layer_style.json.tmp'));
+  final targetPath = p.join(mapPath, 'layer_style.json');
+  final temporaryPath = p.join(mapPath, 'layer_style.json.tmp');
+  await _rejectSymbolicLink(targetPath);
+  await _rejectSymbolicLink(temporaryPath);
+  final target = File(targetPath);
+  final temporary = File(temporaryPath);
   await temporary.writeAsString(content, flush: true);
   await _installTemporaryFile(temporary, target);
 }
