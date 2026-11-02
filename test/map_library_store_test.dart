@@ -259,6 +259,72 @@ void main() {
       );
     });
 
+
+    test('writes and reads all three GeoJSON FeatureCollections', () async {
+      await MapLibraryStore.initialize();
+      await Directory(p.join(libraryDirectory.path, 'map_001'))
+          .create(recursive: true);
+      await MapLibraryStore.writeMeta(sampleMeta());
+
+      const empty = '{"type":"FeatureCollection","features":[]}';
+      for (final geometry in ['polygons', 'lines', 'points']) {
+        await MapLibraryStore.writeGeoJson('map_001', geometry, empty);
+        expect(
+          await MapLibraryStore.readGeoJson('map_001', geometry),
+          empty,
+        );
+        expect(
+          await File(p.join(
+            libraryDirectory.path,
+            'map_001',
+            '$geometry.geojson',
+          )).exists(),
+          isTrue,
+        );
+      }
+    });
+
+    test('preserves GeoJSON feature coordinates without modification', () async {
+      await MapLibraryStore.initialize();
+      await Directory(p.join(libraryDirectory.path, 'map_001'))
+          .create(recursive: true);
+      await MapLibraryStore.writeMeta(sampleMeta());
+      const source = '{"type":"FeatureCollection","features":['
+          '{"type":"Feature","properties":{},"geometry":{"type":"LineString",'
+          '"coordinates":[[118.123456789,-2.123456789],[119.987654321,-3.987654321]]}}]}';
+
+      await MapLibraryStore.writeGeoJson('map_001', 'lines', source);
+      expect(await MapLibraryStore.readGeoJson('map_001', 'lines'), source);
+    });
+
+    test('rejects invalid geometry names and malformed GeoJSON', () async {
+      await MapLibraryStore.initialize();
+      await Directory(p.join(libraryDirectory.path, 'map_001'))
+          .create(recursive: true);
+      await MapLibraryStore.writeMeta(sampleMeta());
+
+      expect(
+        () => MapLibraryStore.writeGeoJson('map_001', 'roads', '{}'),
+        throwsFormatException,
+      );
+      expect(
+        () => MapLibraryStore.writeGeoJson('map_001', 'points', '{"type":"FeatureCollection"}'),
+        throwsFormatException,
+      );
+    });
+
+    test('reports a missing GeoJSON file clearly', () async {
+      await MapLibraryStore.initialize();
+      await Directory(p.join(libraryDirectory.path, 'map_001'))
+          .create(recursive: true);
+      await MapLibraryStore.writeMeta(sampleMeta());
+
+      expect(
+        MapLibraryStore.readGeoJson('map_001', 'polygons'),
+        throwsStateError,
+      );
+    });
+
     test('reads empty active index when no file exists', () async {
       await MapLibraryStore.initialize();
       final index = await MapLibraryStore.readActiveMapIndex();
