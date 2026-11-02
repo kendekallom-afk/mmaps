@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import '../models/map_library_item.dart';
 import '../models/map_library_active_index.dart';
 import '../models/map_meta.dart';
@@ -63,4 +65,42 @@ Future<void> writeOriginalSource(String id, List<int> bytes) async {
     throw FormatException('Unsupported original source extension: $extension');
   }
   _originalSources[id] = List<int>.unmodifiable(bytes);
+}
+
+final Map<String, Map<String, String>> _geoJsonFiles = {};
+
+String _geoJsonKey(String geometry) {
+  if (geometry != 'polygons' && geometry != 'lines' && geometry != 'points') {
+    throw FormatException('Unsupported geometry type: $geometry');
+  }
+  return geometry;
+}
+
+void _validateFeatureCollection(String content) {
+  final decoded = jsonDecode(content);
+  if (decoded is! Map<String, dynamic> ||
+      decoded['type'] != 'FeatureCollection' ||
+      decoded['features'] is! List) {
+    throw const FormatException(
+      'GeoJSON must be a FeatureCollection with a features array',
+    );
+  }
+}
+
+Future<String> readGeoJson(String id, String geometry) async {
+  if (!MapMeta.isValidId(id)) throw FormatException('Invalid map ID: $id');
+  if (!_metadata.containsKey(id)) throw StateError('Map not found: $id');
+  final key = _geoJsonKey(geometry);
+  final content = _geoJsonFiles[id]?[key];
+  if (content == null) throw StateError('$key GeoJSON not found for map: $id');
+  _validateFeatureCollection(content);
+  return content;
+}
+
+Future<void> writeGeoJson(String id, String geometry, String content) async {
+  if (!MapMeta.isValidId(id)) throw FormatException('Invalid map ID: $id');
+  if (!_metadata.containsKey(id)) throw StateError('Map not found: $id');
+  final key = _geoJsonKey(geometry);
+  _validateFeatureCollection(content);
+  (_geoJsonFiles[id] ??= {})[key] = content;
 }
