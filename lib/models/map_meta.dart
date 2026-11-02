@@ -1,3 +1,19 @@
+/// Thrown when a map was created by a newer, unsupported metadata format.
+class UnsupportedMapFormatVersionException implements Exception {
+  final int foundVersion;
+  final int supportedVersion;
+
+  const UnsupportedMapFormatVersionException({
+    required this.foundVersion,
+    required this.supportedVersion,
+  });
+
+  @override
+  String toString() =>
+      'Map format version $foundVersion is not supported. '
+      'This app supports up to version $supportedVersion.';
+}
+
 /// Metadata for one folder-based map in the mMaps library.
 ///
 /// This model deliberately contains no file-system or MapLibre dependencies.
@@ -47,6 +63,12 @@ class MapMeta {
     }
     if (formatVersion < 1) {
       throw FormatException('Invalid formatVersion: $formatVersion');
+    }
+    if (formatVersion > currentFormatVersion) {
+      throw UnsupportedMapFormatVersionException(
+        foundVersion: formatVersion,
+        supportedVersion: currentFormatVersion,
+      );
     }
     if (name.trim().isEmpty) {
       throw const FormatException('Map name must not be empty');
