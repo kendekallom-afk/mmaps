@@ -24,6 +24,14 @@ abstract final class MapLibraryStore {
   /// replace a map folder; folder creation belongs to the importer stage.
   static Future<void> writeMeta(MapMeta meta) => backend.writeMeta(meta);
 
+  /// Reads the original KML/KMZ source bytes for a map.
+  static Future<List<int>> readOriginalSource(String id) =>
+      backend.readOriginalSource(id);
+
+  /// Writes the original KML/KMZ source using the extension in map metadata.
+  static Future<void> writeOriginalSource(String id, List<int> bytes) =>
+      backend.writeOriginalSource(id, bytes);
+
   /// Reads active IDs and reports valid IDs whose map folders are missing.
   static Future<MapLibraryActiveIndex> readActiveMapIndex() =>
       backend.readActiveMapIndex();

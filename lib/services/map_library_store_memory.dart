@@ -28,6 +28,7 @@ Future<void> writeMeta(MapMeta meta) async {
 }
 
 final List<String> _activeMapIds = [];
+final Map<String, List<int>> _originalSources = {};
 
 Future<MapLibraryActiveIndex> readActiveMapIndex() async {
   final orphans = _activeMapIds.where((id) => !_metadata.containsKey(id)).toList();
@@ -43,4 +44,23 @@ Future<void> writeActiveMapIds(List<String> ids) async {
   _activeMapIds
     ..clear()
     ..addAll(ids);
+}
+
+Future<List<int>> readOriginalSource(String id) async {
+  if (!MapMeta.isValidId(id)) throw FormatException('Invalid map ID: $id');
+  if (!_metadata.containsKey(id)) throw StateError('Map not found: $id');
+  final bytes = _originalSources[id];
+  if (bytes == null) throw StateError('Original source not found for map: $id');
+  return List<int>.unmodifiable(bytes);
+}
+
+Future<void> writeOriginalSource(String id, List<int> bytes) async {
+  if (!MapMeta.isValidId(id)) throw FormatException('Invalid map ID: $id');
+  final meta = _metadata[id];
+  if (meta == null) throw StateError('Map not found: $id');
+  final extension = meta.originalExtension.toLowerCase();
+  if (extension != 'kml' && extension != 'kmz') {
+    throw FormatException('Unsupported original source extension: $extension');
+  }
+  _originalSources[id] = List<int>.unmodifiable(bytes);
 }

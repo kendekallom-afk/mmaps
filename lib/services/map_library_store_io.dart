@@ -152,6 +152,42 @@ Future<void> writeMeta(MapMeta meta) async {
   }
 }
 
+Future<List<int>> readOriginalSource(String id) async {
+  final mapPath = await _validatedMapPath(id);
+  final meta = await readMeta(id);
+  final extension = meta.originalExtension.toLowerCase();
+  if (extension != 'kml' && extension != 'kmz') {
+    throw FormatException('Unsupported original source extension: $extension');
+  }
+  final file = File(p.join(mapPath, 'original.$extension'));
+  if (!await file.exists()) {
+    throw StateError('Original source not found for map: $id');
+  }
+  return file.readAsBytes();
+}
+
+Future<void> writeOriginalSource(String id, List<int> bytes) async {
+  final mapPath = await _validatedMapPath(id);
+  final folder = Directory(mapPath);
+  if (!await folder.exists()) {
+    throw StateError('Map folder does not exist: $id');
+  }
+  final meta = await readMeta(id);
+  final extension = meta.originalExtension.toLowerCase();
+  if (extension != 'kml' && extension != 'kmz') {
+    throw FormatException('Unsupported original source extension: $extension');
+  }
+
+  final target = File(p.join(mapPath, 'original.$extension'));
+  final temporary = File(p.join(mapPath, 'original.$extension.tmp'));
+  await temporary.writeAsBytes(bytes, flush: true);
+  try {
+    await temporary.rename(target.path);
+  } finally {
+    if (await temporary.exists()) await temporary.delete();
+  }
+}
+
 Future<MapLibraryActiveIndex> readActiveMapIndex() async {
   final root = await _rootDirectory();
   await root.create(recursive: true);
