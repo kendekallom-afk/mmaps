@@ -97,6 +97,23 @@ void main() {
       );
     });
 
+    test('reports a future unsupported format version distinctly', () {
+      final json = createMeta().toJson()..['formatVersion'] = 2;
+
+      expect(
+        () => MapMeta.fromJson(json),
+        throwsA(
+          isA<UnsupportedMapFormatVersionException>()
+              .having((error) => error.foundVersion, 'foundVersion', 2)
+              .having(
+                (error) => error.supportedVersion,
+                'supportedVersion',
+                MapMeta.currentFormatVersion,
+              ),
+        ),
+      );
+    });
+
     test('rejects malformed JSON field types', () {
       final json = createMeta().toJson()..['featureCounts'] = 'invalid';
       expect(() => MapMeta.fromJson(json), throwsFormatException);
