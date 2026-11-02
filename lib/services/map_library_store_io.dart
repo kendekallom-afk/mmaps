@@ -188,6 +188,63 @@ Future<void> writeOriginalSource(String id, List<int> bytes) async {
   }
 }
 
+
+String _geoJsonFileName(String geometry) {
+  switch (geometry) {
+    case 'polygons':
+    case 'lines':
+    case 'points':
+      return '$geometry.geojson';
+    default:
+      throw FormatException(
+        'Unsupported geometry type: $geometry. Use polygons, lines, or points.',
+      );
+  }
+}
+
+void _validateFeatureCollection(String content) {
+  final decoded = jsonDecode(content);
+  if (decoded is! Map<String, dynamic> ||
+      decoded['type'] != 'FeatureCollection' ||
+      decoded['features'] is! List) {
+    throw const FormatException(
+      'GeoJSON must be a FeatureCollection with a features array',
+    );
+  }
+}
+
+Future<String> readGeoJson(String id, String geometry) async {
+  final mapPath = await _validatedMapPath(id);
+  final fileName = _geoJsonFileName(geometry);
+  if (!await Directory(mapPath).exists()) {
+    throw StateError('Map folder not found: $id');
+  }
+  final file = File(p.join(mapPath, fileName));
+  if (!await file.exists()) {
+    throw StateError('$fileName not found for map: $id');
+  }
+  final content = await file.readAsString();
+  _validateFeatureCollection(content);
+  return content;
+}
+
+Future<void> writeGeoJson(String id, String geometry, String content) async {
+  final mapPath = await _validatedMapPath(id);
+  final fileName = _geoJsonFileName(geometry);
+  if (!await Directory(mapPath).exists()) {
+    throw StateError('Map folder does not exist: $id');
+  }
+  _validateFeatureCollection(content);
+  final target = File(p.join(mapPath, fileName));
+  final temporary = File(p.join(mapPath, '$fileName.tmp'));
+  await temporary.writeAsString(content, flush: true);
+  try {
+    await temporary.rename(target.path);
+  } finally {
+    if (await temporary.exists()) await temporary.delete();
+  }
+}
+
 Future<MapLibraryActiveIndex> readActiveMapIndex() async {
   final root = await _rootDirectory();
   await root.create(recursive: true);
