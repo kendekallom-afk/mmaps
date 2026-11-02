@@ -198,6 +198,60 @@ void main() {
           : false,
     );
 
+    test(
+      'rejects symbolic links for metadata, source, GeoJSON and style files',
+      () async {
+        await MapLibraryStore.initialize();
+        final folder = Directory(p.join(libraryDirectory.path, 'map_001'));
+        await folder.create(recursive: true);
+        await MapLibraryStore.writeMeta(sampleMeta());
+        final outside = await Directory.systemTemp.createTemp('mmaps_file_link_');
+        addTearDown(() async {
+          if (await outside.exists()) await outside.delete(recursive: true);
+        });
+
+        Future<void> linkFile(String name) async {
+          final external = File(p.join(outside.path, name));
+          await external.writeAsString('{}');
+          await Link(p.join(folder.path, name)).create(external.path);
+        }
+
+        await linkFile('meta.json');
+        await expectLater(MapLibraryStore.readMeta('map_001'),
+            throwsA(isA<FileSystemException>()));
+        await expectLater(MapLibraryStore.writeMeta(sampleMeta(name: 'Changed')),
+            throwsA(isA<FileSystemException>()));
+        await Link(p.join(folder.path, 'meta.json')).delete();
+        await MapLibraryStore.writeMeta(sampleMeta());
+
+        await linkFile('original.kmz');
+        await expectLater(MapLibraryStore.readOriginalSource('map_001'),
+            throwsA(isA<FileSystemException>()));
+        await expectLater(MapLibraryStore.writeOriginalSource('map_001', [1, 2]),
+            throwsA(isA<FileSystemException>()));
+        await Link(p.join(folder.path, 'original.kmz')).delete();
+
+        await linkFile('points.geojson');
+        await expectLater(MapLibraryStore.readGeoJson('map_001', 'points'),
+            throwsA(isA<FileSystemException>()));
+        await expectLater(
+          MapLibraryStore.writeGeoJson('map_001', 'points',
+              '{"type":"FeatureCollection","features":[]}'),
+          throwsA(isA<FileSystemException>()),
+        );
+        await Link(p.join(folder.path, 'points.geojson')).delete();
+
+        await linkFile('layer_style.json');
+        await expectLater(MapLibraryStore.readLayerStyle('map_001'),
+            throwsA(isA<FileSystemException>()));
+        await expectLater(MapLibraryStore.writeLayerStyle('map_001', '{}'),
+            throwsA(isA<FileSystemException>()));
+      },
+      skip: Platform.isWindows
+          ? 'Windows symlink creation may require Developer Mode or elevation'
+          : false,
+    );
+
     test('writes and reads original KMZ bytes', () async {
       await MapLibraryStore.initialize();
       await Directory(p.join(libraryDirectory.path, 'map_001'))
