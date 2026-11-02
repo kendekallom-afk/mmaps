@@ -1,12 +1,13 @@
 import 'dart:convert';
 import 'dart:typed_data';
-
+import 'dart:async';
 import 'package:archive/archive.dart';
 import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:xml/xml.dart';
+import 'package:xml/xml_events.dart';
 
 import '../models/imported_map.dart';
 
@@ -510,6 +511,365 @@ class KmlImportService {
     }
     return true;
   }
+  
+Stream<List<int>> _kmlByteChunks(
+  Uint8List bytes, {
+  int chunkSize = 64 * 1024,
+}) async* {
+  for (var offset = 0; offset < bytes.length; offset += chunkSize) {
+    final end = (offset + chunkSize < bytes.length)
+        ? offset + chunkSize
+        : bytes.length;
+
+    yield bytes.sublist(offset, end);
+  }
+}
+Future<void> _readXmlEvents(
+  Uint8List bytes, {
+  required void Function(XmlStartElementEvent event) onStartElement,
+  required void Function(XmlEndElementEvent event) onEndElement,
+  required void Function(XmlTextEvent event) onText,
+}) async {
+  try {
+    await _kmlByteChunks(bytes)
+        .transform(utf8.decoder)
+        .toXmlEvents(
+          validateNesting: true,
+          validateDocument: true,
+        )
+        .normalizeEvents()
+        .expand((events) => events)
+        .forEachEvent(
+          onStartElement: onStartElement,
+          onEndElement: onEndElement,
+          onText: onText,
+        );
+  } on XmlException catch (error) {
+    throw FormatException(
+      'File KML tidak valid: ${error.message}',
+    );
+  }
+}
+
+
+Future<Map<String, _KmlStyle>> _readStreamingStyles(
+  Uint8List bytes,
+) async {
+  final styles = <String, _KmlStyle>{};
+
+  var depth = 0;
+  var styleDepth = -1;
+  String? styleId;
+
+  String? currentProperty;
+  String? currentSection;
+  final propertyValues = <String, String>{};
+
+  String localName(String name) {
+    final index = name.indexOf(':');
+    return index == -1 ? name : name.substring(index + 1);
+  }
+
+  await _readXmlEvents(
+    bytes,
+    onStartElement: (event) {
+      depth++;
+
+      final name = localName(event.name);
+
+      if (name == 'Style' && styleDepth == -1) {
+        final idAttribute = event.attributes
+            .where((attribute) => localName(attribute.name) == 'id')
+            .firstOrNull;
+
+        styleId = idAttribute?.value;
+
+        if (styleId != null) {
+          styleDepth = depth;
+          propertyValues.clear();
+        }
+      } else if (styleDepth != -1 && depth == styleDepth + 1) {
+        if (const {'LineStyle', 'PolyStyle', 'IconStyle'}.contains(name)) {
+          currentSection = name;
+        }
+      } else if (styleDepth != -1 &&
+          currentSection != null &&
+          depth == styleDepth + 2) {
+        currentProperty = name;
+      }
+    },
+    onText: (event) {
+      if (styleDepth == -1 || currentProperty == null) return;
+
+      final value = event.value;
+      if (value.trim().isEmpty) return;
+
+      final key = '$currentSection.$currentProperty';
+      propertyValues.update(
+        key,
+        (oldValue) => '$oldValue$value',
+        ifAbsent: () => value,
+      );
+    },
+    onEndElement: (event) {
+      if (styleDepth != -1 && depth == styleDepth) {
+        final style = _KmlStyle();
+
+        final lineColor = propertyValues['LineStyle.color']?.trim();
+        if (lineColor != null && lineColor.isNotEmpty) {
+          style.lineColor = _parseKmlColor(lineColor);
+        }
+
+        final lineWidth = propertyValues['LineStyle.width']?.trim();
+        if (lineWidth != null && lineWidth.isNotEmpty) {
+          style.lineWidth = double.tryParse(lineWidth) ?? 3.0;
+        }
+
+        final polyColor = propertyValues['PolyStyle.color']?.trim();
+        if (polyColor != null && polyColor.isNotEmpty) {
+          style.polyColor = _parseKmlColor(polyColor);
+        }
+
+        final fill = propertyValues['PolyStyle.fill']?.trim();
+        if (fill != null && _isFalse(fill)) {
+          style.fillEnabled = false;
+        }
+
+        final outline = propertyValues['PolyStyle.outline']?.trim();
+        if (outline != null && _isFalse(outline)) {
+          style.outlineEnabled = false;
+        }
+
+        final iconColor = propertyValues['IconStyle.color']?.trim();
+        if (iconColor != null && iconColor.isNotEmpty) {
+          style.iconColor = _parseKmlColor(iconColor);
+        }
+
+        styles[styleId!] = style;
+
+        styleId = null;
+        styleDepth = -1;
+        currentSection = null;
+        currentProperty = null;
+        propertyValues.clear();
+      } else if (currentSection != null &&
+          depth == styleDepth + 1) {
+        currentSection = null;
+        currentProperty = null;
+      } else if (currentProperty != null &&
+          depth == styleDepth + 2) {
+        currentProperty = null;
+      }
+
+      depth--;
+    },
+  );
+
+  return styles;
+}
+
+Future<Map<String, _StreamingStyleMapEntry>>
+    _readStreamingStyleMaps(Uint8List bytes) async {
+  final result = <String, _StreamingStyleMapEntry>{};
+
+  String localName(String name) {
+    final index = name.indexOf(':');
+    return index == -1 ? name : name.substring(index + 1);
+  }
+
+  var depth = 0;
+  var styleMapDepth = -1;
+  var pairDepth = -1;
+  var inlineStyleDepth = -1;
+
+  String? styleMapId;
+  String? pairKey;
+  String? pairStyleUrl;
+
+  String? currentSection;
+  String? currentProperty;
+
+  final inlineValues = <String, String>{};
+
+  var textTarget = '';
+
+  await _readXmlEvents(
+    bytes,
+    onStartElement: (event) {
+      depth++;
+
+      final name = localName(event.name);
+
+      if (name == 'StyleMap' && styleMapDepth == -1) {
+        final id = event.attributes
+            .where((attribute) => localName(attribute.name) == 'id')
+            .firstOrNull;
+
+        styleMapId = id?.value;
+
+        if (styleMapId != null) {
+          styleMapDepth = depth;
+        }
+      } else if (styleMapDepth != -1 &&
+          pairDepth == -1 &&
+          name == 'Pair') {
+        pairDepth = depth;
+        pairKey = null;
+        pairStyleUrl = null;
+        inlineStyleDepth = -1;
+        currentSection = null;
+        currentProperty = null;
+        inlineValues.clear();
+      } else if (pairDepth != -1) {
+        if (inlineStyleDepth == -1 &&
+            depth == pairDepth + 1) {
+          if (name == 'key' || name == 'styleUrl') {
+            textTarget = name;
+          } else if (name == 'Style') {
+            inlineStyleDepth = depth;
+          }
+        } else if (inlineStyleDepth != -1) {
+          if (depth == inlineStyleDepth + 1 &&
+              const {
+                'LineStyle',
+                'PolyStyle',
+                'IconStyle',
+              }.contains(name)) {
+            currentSection = name;
+          } else if (currentSection != null &&
+              depth == inlineStyleDepth + 2) {
+            currentProperty = name;
+            textTarget = 'inline';
+          }
+        }
+      }
+    },
+    onText: (event) {
+      final value = event.value;
+
+      if (textTarget == 'key') {
+        pairKey = '${pairKey ?? ''}$value';
+      } else if (textTarget == 'styleUrl') {
+        pairStyleUrl = '${pairStyleUrl ?? ''}$value';
+      } else if (textTarget == 'inline' &&
+          currentSection != null &&
+          currentProperty != null) {
+        final key = '$currentSection.$currentProperty';
+
+        inlineValues.update(
+          key,
+          (oldValue) => '$oldValue$value',
+          ifAbsent: () => value,
+        );
+      }
+    },
+    onEndElement: (event) {
+      final name = localName(event.name);
+
+      if (pairDepth != -1 &&
+          inlineStyleDepth != -1 &&
+          depth == inlineStyleDepth) {
+        inlineStyleDepth = -1;
+        currentSection = null;
+        currentProperty = null;
+        textTarget = '';
+      } else if (pairDepth != -1 &&
+          inlineStyleDepth != -1 &&
+          currentSection != null &&
+          depth == inlineStyleDepth + 1) {
+        currentSection = null;
+        currentProperty = null;
+        textTarget = '';
+      } else if (pairDepth != -1 &&
+          inlineStyleDepth != -1 &&
+          currentProperty != null &&
+          depth == inlineStyleDepth + 2) {
+        currentProperty = null;
+        textTarget = '';
+      } else if (pairDepth != -1 &&
+          inlineStyleDepth == -1 &&
+          depth == pairDepth + 1 &&
+          (name == 'key' || name == 'styleUrl')) {
+        textTarget = '';
+      }
+
+      if (pairDepth != -1 && depth == pairDepth) {
+        if (pairKey?.trim() == 'normal') {
+          final inlineStyle = _KmlStyle();
+
+          final lineColor =
+              inlineValues['LineStyle.color']?.trim();
+          if (lineColor != null && lineColor.isNotEmpty) {
+            inlineStyle.lineColor = _parseKmlColor(lineColor);
+          }
+
+          final lineWidth =
+              inlineValues['LineStyle.width']?.trim();
+          if (lineWidth != null && lineWidth.isNotEmpty) {
+            inlineStyle.lineWidth =
+                double.tryParse(lineWidth) ?? 3.0;
+          }
+
+          final polyColor =
+              inlineValues['PolyStyle.color']?.trim();
+          if (polyColor != null && polyColor.isNotEmpty) {
+            inlineStyle.polyColor = _parseKmlColor(polyColor);
+          }
+
+          final fill =
+              inlineValues['PolyStyle.fill']?.trim();
+          if (fill != null && _isFalse(fill)) {
+            inlineStyle.fillEnabled = false;
+          }
+
+          final outline =
+              inlineValues['PolyStyle.outline']?.trim();
+          if (outline != null && _isFalse(outline)) {
+            inlineStyle.outlineEnabled = false;
+          }
+
+          final iconColor =
+              inlineValues['IconStyle.color']?.trim();
+          if (iconColor != null && iconColor.isNotEmpty) {
+            inlineStyle.iconColor = _parseKmlColor(iconColor);
+          }
+
+          if (styleMapId != null) {
+            result[styleMapId!] = _StreamingStyleMapEntry(
+              styleUrl: pairStyleUrl?.trim(),
+              inlineStyle: inlineValues.isEmpty
+                  ? null
+                  : inlineStyle,
+            );
+          }
+
+          // Mengikuti perilaku parser lama:
+          // hanya Pair normal pertama yang dipakai.
+          pairDepth = -1;
+          inlineStyleDepth = -1;
+          currentSection = null;
+          currentProperty = null;
+          textTarget = '';
+        } else {
+          pairDepth = -1;
+          inlineStyleDepth = -1;
+          currentSection = null;
+          currentProperty = null;
+          textTarget = '';
+        }
+      }
+
+      if (styleMapDepth != -1 && depth == styleMapDepth) {
+        styleMapDepth = -1;
+        styleMapId = null;
+      }
+
+      depth--;
+    },
+  );
+
+  return result;
+}
 
   // ==========================================
   // XML & STYLE
@@ -1059,16 +1419,36 @@ class _KmlStyle {
   bool outlineEnabled = true;
 }
 
+class _StreamingStyleMapEntry {
+  final String? styleUrl;
+  final _KmlStyle? inlineStyle;
+
+  const _StreamingStyleMapEntry({
+    this.styleUrl,
+    this.inlineStyle,
+  });
+}
+
+class _KmlMetadata {
+  final Map<String, _KmlStyle> styles;
+  final String documentName;
+
+  const _KmlMetadata({
+    required this.styles,
+    required this.documentName,
+  });
+}
+
 class _KmlSource {
   Uint8List? _bytes;
   final Map<String, ArchiveFile> assets;
   final String baseDirectory;
 
   _KmlSource({
-    required Uint8List bytes,
+    required Uint8List this._bytes,
     required this.assets,
     required this.baseDirectory,
-  }) : _bytes = bytes;
+  });
 
   int get length => _bytes?.length ?? 0;
 

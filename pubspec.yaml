@@ -106,3 +106,8 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
+dependency_overrides:
+  maplibre_gl:
+    path: local_plugins/maplibre_gl
+  maplibre_gl_platform_interface:
+    path: local_plugins/maplibre_gl_platform_interface

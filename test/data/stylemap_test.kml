@@ -1,0 +1,81 @@
+
+<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>StyleMap Test</name>
+
+    <!-- Style biasa -->
+    <Style id="polygonStyle">
+      <LineStyle>
+        <color>ff0000ff</color>
+        <width>4</width>
+      </LineStyle>
+      <PolyStyle>
+        <color>8000ff00</color>
+        <fill>1</fill>
+        <outline>0</outline>
+      </PolyStyle>
+      <IconStyle>
+        <color>ffff0000</color>
+      </IconStyle>
+    </Style>
+
+    <!-- StyleMap dengan highlight sebelum normal -->
+    <StyleMap id="polygonMap">
+      <Pair>
+        <key>highlight</key>
+        <styleUrl>#highlightStyle</styleUrl>
+      </Pair>
+      <Pair>
+        <key>normal</key>
+        <styleUrl>#polygonStyle</styleUrl>
+      </Pair>
+    </StyleMap>
+
+    <Style id="highlightStyle">
+      <LineStyle>
+        <color>ff00ffff</color>
+        <width>6</width>
+      </LineStyle>
+    </Style>
+
+    <!-- StyleMap dengan inline Style -->
+    <StyleMap id="inlineMap">
+      <Pair>
+        <key>normal</key>
+        <Style>
+          <LineStyle>
+            <color>ff00ff00</color>
+            <width>2</width>
+          </LineStyle>
+          <PolyStyle>
+            <color>400000ff</color>
+            <fill>0</fill>
+          </PolyStyle>
+        </Style>
+      </Pair>
+    </StyleMap>
+
+    <!-- StyleMap yang menunjuk ke StyleMap lain -->
+    <StyleMap id="nestedMap">
+      <Pair>
+        <key>normal</key>
+        <styleUrl>#polygonMap</styleUrl>
+      </Pair>
+    </StyleMap>
+
+    <Placemark>
+      <name>Polygon Test</name>
+      <styleUrl>#nestedMap</styleUrl>
+      <Polygon>
+        <outerBoundaryIs>
+          <LinearRing>
+            <coordinates>
+              119.0,-2.0 119.01,-2.0 119.01,-2.01 119.0,-2.01 119.0,-2.0
+            </coordinates>
+          </LinearRing>
+        </outerBoundaryIs>
+      </Polygon>
+    </Placemark>
+  </Document>
+</kml>

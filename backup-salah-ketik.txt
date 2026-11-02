@@ -1,0 +1,167 @@
+warning: in the working copy of 'lib/screens/map_home_page.dart', LF will be replaced by CRLF the next time Git touches it
+[1mdiff --git a/lib/screens/map_home_page.dart b/lib/screens/map_home_page.dart[m
+[1mindex ab3d5b5..70ecef1 100644[m
+[1m--- a/lib/screens/map_home_page.dart[m
+[1m+++ b/lib/screens/map_home_page.dart[m
+[36m@@ -78,6 +78,9 @@[m [mclass _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {[m
+   static const String _puckSourceId = 'user-puck-source';[m
+   static const String _puckLayerId = 'user-puck-layer';[m
+ [m
+[32m+[m[32m  // Tes isolasi: false = gunakan puck native MapLibre saja.[m
+[32m+[m[32m  static const bool _useCustomPuck = true;[m
+[32m+[m
+   // Measurement sources and layers[m
+   static const String _measureLineSourceId = 'measure-line-source';[m
+   static const String _measureLineLayerId = 'measure-line-layer';[m
+[36m@@ -257,6 +260,7 @@[m [mclass _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {[m
+     _resumeGpsOnForeground = false;[m
+     await _cancelGpsStreams();[m
+ [m
+[32m+[m[32m    if (!_useCustomPuck) return;[m
+     final controller = _mapController;[m
+     if (controller == null || !_isStyleLoaded) return;[m
+     try {[m
+[36m@@ -303,54 +307,58 @@[m [mclass _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {[m
+       await _initializeMeasureLayers(controller);[m
+       if (!_isCurrentStyleController(controller)) return;[m
+ [m
+[31m-      // 2. Tambahkan gambar puck[m
+[31m-      final ByteData data = await rootBundle.load([m
+[31m-        'assets/images/location_puck.png',[m
+[31m-      );[m
+[31m-      if (!_isCurrentStyleController(controller)) return;[m
+[31m-      final Uint8List bytes = data.buffer.asUint8List([m
+[31m-        data.offsetInBytes,[m
+[31m-        data.lengthInBytes,[m
+[31m-      );[m
+[31m-      [m
+[31m-        debugPrint('[PUCK IMAGE] Mulai memuat ikon, ukuran: ${bytes.length} bytes');[m
+[31m-[m
+[31m-        try {[m
+[31m-          await controller.addImage('puck-icon', bytes);[m
+[31m-          debugPrint('[PUCK IMAGE] addImage berhasil');[m
+[31m-        } catch (e, st) {[m
+[31m-          debugPrint('[PUCK IMAGE] addImage GAGAL: $e');[m
+[31m-          debugPrint('$st');[m
+[31m-          rethrow;[m
+[31m-        }[m
+[31m-[m
+[32m+[m[32m      // Tes isolasi puck: nonaktifkan aset/source/layer buatan sementara.[m
+[32m+[m[32m      if (_useCustomPuck) {[m
+[32m+[m[32m        // 2. Tambahkan gambar puck[m
+[32m+[m[32m        final ByteData data = await rootBundle.load([m
+[32m+[m[32m          'assets/images/location_puck.png',[m
+[32m+[m[32m        );[m
+         if (!_isCurrentStyleController(controller)) return;[m
+[31m-[m
+[31m-[m
+[31m-      // 3. Tambahkan source dan layer puck[m
+[31m-      await controller.addGeoJsonSource(_puckSourceId, {[m
+[31m-        "type": "FeatureCollection",[m
+[31m-        "features": [],[m
+[31m-      });[m
+[31m-      if (!_isCurrentStyleController(controller)) return;[m
+[31m-      debugPrint('[PUCK LAYER] Mulai membuat layer');[m
+[31m-      await controller.addSymbolLayer([m
+[31m-        _puckSourceId,[m
+[31m-        _puckLayerId,[m
+[31m-        const ml.SymbolLayerProperties([m
+[31m-          iconImage: 'puck-icon',[m
+[31m-          iconSize: 2.0,[m
+[31m-          iconRotate: ['get', 'heading'],[m
+[31m-          iconAllowOverlap: true,[m
+[31m-          iconIgnorePlacement: true,[m
+[31m-        ),[m
+[31m-      );[m
+[31m-      debugPrint('[PUCK LAYER] Layer berhasil dibuat');[m
+[31m-      if (!_isCurrentStyleController(controller)) return;[m
+[31m-[m
+[31m-      // 4. Update posisi puck setelah sourcenya tersedia.[m
+[31m-      await _updateUserPuck();[m
+[31m-      if (!_isCurrentStyleController(controller)) return;[m
+[32m+[m[32m        final Uint8List bytes = data.buffer.asUint8List([m
+[32m+[m[32m          data.offsetInBytes,[m
+[32m+[m[32m          data.lengthInBytes,[m
+[32m+[m[32m        );[m
+[32m+[m[41m        [m
+[32m+[m[32m          debugPrint('[PUCK IMAGE] Mulai memuat ikon, ukuran: ${bytes.length} bytes');[m
+[32m+[m[41m  [m
+[32m+[m[32m          try {[m
+[32m+[m[32m            await controller.addImage('puck-icon', bytes);[m
+[32m+[m[32m            debugPrint('[PUCK IMAGE] addImage berhasil');[m
+[32m+[m[32m          } catch (e, st) {[m
+[32m+[m[32m            debugPrint('[PUCK IMAGE] addImage GAGAL: $e');[m
+[32m+[m[32m            debugPrint('$st');[m
+[32m+[m[32m            rethrow;[m
+[32m+[m[32m          }[m
+[32m+[m[41m  [m
+[32m+[m[32m          if (!_isCurrentStyleController(controller)) return;[m
+[32m+[m[41m  [m
+[32m+[m[41m  [m
+[32m+[m[32m        // 3. Tambahkan source dan layer puck[m
+[32m+[m[32m        await controller.addGeoJsonSource(_puckSourceId, {[m
+[32m+[m[32m          "type": "FeatureCollection",[m
+[32m+[m[32m          "features": [],[m
+[32m+[m[32m        });[m
+[32m+[m[32m        if (!_isCurrentStyleController(controller)) return;[m
+[32m+[m[32m        debugPrint('[PUCK LAYER] Mulai membuat layer');[m
+[32m+[m[32m        await controller.addSymbolLayer([m
+[32m+[m[32m          _puckSourceId,[m
+[32m+[m[32m          _puckLayerId,[m
+[32m+[m[32m          const ml.SymbolLayerProperties([m
+[32m+[m[32m            iconImage: 'puck-icon',[m
+[32m+[m[32m            iconSize: 1.0,[m
+[32m+[m[32m            iconRotate: ['get', 'heading'],[m
+[32m+[m[32m            iconAllowOverlap: true,[m
+[32m+[m[32m            iconIgnorePlacement: true,[m
+[32m+[m[32m          ),[m
+[32m+[m[32m        );[m
+[32m+[m[32m        debugPrint('[PUCK LAYER] Layer berhasil dibuat');[m
+[32m+[m[32m        if (!_isCurrentStyleController(controller)) return;[m
+[32m+[m[41m  [m
+[32m+[m[32m        // 4. Update posisi puck setelah sourcenya tersedia.[m
+[32m+[m[32m        await _updateUserPuck();[m
+[32m+[m[32m        if (!_isCurrentStyleController(controller)) return;[m
+[32m+[m[41m  [m
+[32m+[m[32m        }[m
+ [m
+       // 5. Tambahkan source dan layer untuk waypoints[m
+       await controller.addGeoJsonSource([m
+[36m@@ -1029,6 +1037,7 @@[m [mclass _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {[m
+   }[m
+ [m
+   Future<void> _updateUserPuck() async {[m
+[32m+[m[32m    if (!_useCustomPuck) return;[m
+     if (_mapController == null || !_isStyleLoaded || _gpsPosition == null) {[m
+       return;[m
+     }[m
+[36m@@ -1198,21 +1207,13 @@[m [mclass _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {[m
+                         zoom: _zoom,[m
+                       ),[m
+                       trackCameraPosition: true,[m
+[31m-                      myLocationEnabled: _gpsActive,[m
+[32m+[m[32m                      myLocationEnabled: false, // Gunakan puck panah khusus mMaps, bukan puck native.[m
+                       myLocationTrackingMode: ml.MyLocationTrackingMode.none,[m
+                       myLocationRenderMode: ml.MyLocationRenderMode.normal,[m
+                       onMapCreated: _onMapCreated,[m
+                       onStyleLoadedCallback: _onStyleLoaded,[m
+                       onCameraIdle: _onCameraIdle,[m
+                       onCameraMove: _onCameraMove,[m
+[31m-                      [m
+[31m-                      onUserLocationUpdated: (location) {[m
+[31m-                        debugPrint([m
+[31m-                          '[NATIVE PUCK] Lokasi MapLibre diterima: '[m
+[31m-                          '${location.position}',[m
+[31m-                        );[m
+[31m-                      },[m
+[31m-[m
+ [m
+                       // Aktifkan klik peta ketika marker ditekan.[m
+                       featureTapsTriggersMapClick: true,[m
+[36m@@ -2164,4 +2165,4 @@[m [mclass _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {[m
+       if (mounted) _showGpsMessage('$failureMessage $error');[m
+     }[m
+   }[m
+[31m-}[m
+[32m+[m[32m}[m
+\ No newline at end of file[m
