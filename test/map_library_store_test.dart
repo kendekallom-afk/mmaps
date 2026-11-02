@@ -144,6 +144,59 @@ void main() {
       );
     });
 
+    test('reports malformed metadata as a damaged map entry', () async {
+      await MapLibraryStore.initialize();
+      final folder = Directory(p.join(libraryDirectory.path, 'broken_json'));
+      await folder.create(recursive: true);
+      await File(p.join(folder.path, 'meta.json'))
+          .writeAsString('{ this is not valid JSON');
+
+      final items = await MapLibraryStore.listMaps();
+
+      expect(items, hasLength(1));
+      expect(items.single.folderId, 'broken_json');
+      expect(items.single.isValid, isFalse);
+    });
+
+    test('reports folders with invalid IDs instead of opening them', () async {
+      await MapLibraryStore.initialize();
+      await Directory(p.join(libraryDirectory.path, 'Invalid-ID'))
+          .create(recursive: true);
+
+      final items = await MapLibraryStore.listMaps();
+
+      expect(items, hasLength(1));
+      expect(items.single.folderId, 'Invalid-ID');
+      expect(items.single.isValid, isFalse);
+    });
+
+    test(
+      'rejects a map folder symbolic link that points outside the library',
+      () async {
+        await MapLibraryStore.initialize();
+        final outside = await Directory.systemTemp.createTemp('mmaps_outside_');
+        addTearDown(() async {
+          if (await outside.exists()) await outside.delete(recursive: true);
+        });
+
+        final outsideMap = Directory(p.join(outside.path, 'map_001'));
+        await outsideMap.create(recursive: true);
+        await File(p.join(outsideMap.path, 'meta.json'))
+            .writeAsString(jsonEncode(sampleMeta().toJson()));
+
+        final link = Link(p.join(libraryDirectory.path, 'map_001'));
+        await link.create(outsideMap.path);
+
+        expect(
+          () => MapLibraryStore.readMeta('map_001'),
+          throwsFormatException,
+        );
+      },
+      skip: Platform.isWindows
+          ? 'Windows symlink creation may require Developer Mode or elevation'
+          : false,
+    );
+
     test('rejects invalid IDs before accessing storage', () async {
       await MapLibraryStore.initialize();
 
