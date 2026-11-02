@@ -54,11 +54,87 @@ Future<Directory> _rootDirectory() async {
   return Directory(p.join(support.path, 'maps_library'));
 }
 
+/// Recovers interrupted single-file replacements before normal library reads.
+/// If the target exists, installation reached its commit point and backups are
+/// stale. If it is absent, restore the newest backup before removing leftovers.
+Future<void> _recoverBackupFiles(Directory folder) async {
+  if (!await folder.exists()) return;
+  final backups = <String, List<File>>{};
+
+  await for (final entity in folder.list(followLinks: false)) {
+    if (entity is! File) continue;
+    final name = p.basename(entity.path);
+    final marker = name.lastIndexOf('.backup-');
+    if (marker <= 0) continue;
+    final suffix = name.substring(marker + '.backup-'.length);
+    if (int.tryParse(suffix) == null) continue;
+    await _rejectSymbolicLink(entity.path);
+    backups.putIfAbsent(name.substring(0, marker), () => <File>[]).add(entity);
+  }
+
+  for (final entry in backups.entries) {
+    final target = File(p.join(folder.path, entry.key));
+    await _rejectSymbolicLink(target.path);
+    final candidates = entry.value
+      ..sort((a, b) {
+        final aStamp = int.tryParse(a.path.split('.backup-').last) ?? 0;
+        final bStamp = int.tryParse(b.path.split('.backup-').last) ?? 0;
+        return bStamp.compareTo(aStamp);
+      });
+
+    if (!await target.exists()) {
+      // Restore one known previous version. Never promote an uncommitted .tmp.
+      await candidates.first.rename(target.path);
+      candidates.removeAt(0);
+    }
+    for (final backup in candidates) {
+      if (await backup.exists()) await backup.delete();
+    }
+  }
+
+  // A .tmp sibling is never authoritative; the target or backup is safer.
+  await for (final entity in folder.list(followLinks: false)) {
+    if (entity is! File) continue;
+    if (p.basename(entity.path).endsWith('.tmp')) {
+      await _rejectSymbolicLink(entity.path);
+      await entity.delete();
+    }
+  }
+}
+
+/// Removes abandoned contents of an internal directory without following links.
+Future<void> _emptyInternalDirectory(Directory directory) async {
+  if (await FileSystemEntity.type(directory.path, followLinks: false) ==
+      FileSystemEntityType.link) {
+    throw FileSystemException('Internal library directory cannot be a link',
+        directory.path);
+  }
+  await directory.create(recursive: true);
+  await for (final entity in directory.list(followLinks: false)) {
+    if (entity is Link) {
+      await entity.delete();
+    } else if (entity is Directory) {
+      await entity.delete(recursive: true);
+    } else if (entity is File) {
+      await entity.delete();
+    }
+  }
+}
+
 Future<void> initializeLibrary() async {
   final root = await _rootDirectory();
   await root.create(recursive: true);
-  await Directory(p.join(root.path, '.tmp')).create(recursive: true);
-  await Directory(p.join(root.path, '.deleting')).create(recursive: true);
+
+  // Recover the active index and per-map files before deleting temporary data.
+  await _recoverBackupFiles(root);
+  await for (final entity in root.list(followLinks: false)) {
+    if (entity is Directory && !p.basename(entity.path).startsWith('.')) {
+      await _recoverBackupFiles(entity);
+    }
+  }
+
+  await _emptyInternalDirectory(Directory(p.join(root.path, '.tmp')));
+  await _emptyInternalDirectory(Directory(p.join(root.path, '.deleting')));
 }
 
 Future<String> _validatedMapPath(String id) async {
