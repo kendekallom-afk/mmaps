@@ -1,7 +1,8 @@
 # mMaps Map Library & Import Architecture Specification
 
 - **Status:** Frozen design specification (pre-implementation)
-- **Version:** 1.0
+- **Version:** 1.1
+- **Revision:** Adds persistent GroundOverlay asset storage; core architecture and implementation sequence remain unchanged.
 - **Scope:** Map library storage, KML/KMZ import, MapLibre layer lifecycle, legacy migration
 - **Target:** Android and iOS with persistent storage; Web with memory-only behavior
 - **Implementation rule:** This document is the contract for incremental implementation. Do not implement multiple phases at once.
@@ -40,7 +41,11 @@ maps_library/
     ├── lines.geojson
     ├── points.geojson
     ├── layer_style.json
-    └── meta.json
+    ├── meta.json
+    └── overlays/                 # only when supported GroundOverlays exist
+        ├── overlay_0001.png      # original encoded bytes/format
+        ├── overlay_0002.jpg
+        └── overlays.json         # manifest
 ```
 
 Rules:
@@ -48,7 +53,8 @@ Rules:
 - Always write all three GeoJSON files, including empty FeatureCollections.
 - `.tmp` and `.deleting` are internal directories and must never appear as library maps.
 - `active_layers.json` is the sole persistent source of active-map IDs. Do not duplicate active state in `meta.json`.
-- Library listing reads only each map's `meta.json`; it must not read GeoJSON or original source bytes.
+- Library listing reads only each map's `meta.json`; it must not read GeoJSON, overlay manifests/images, or original source bytes.
+- `overlays/` is optional and absent when the map has no supported GroundOverlay.
 - A root scan failure is an error, not a successful empty library.
 - Malformed or missing metadata is reported as a folder issue; do not silently delete it.
 
@@ -93,10 +99,10 @@ Validation:
 | Component | Responsibility |
 |---|---|
 | `MapMeta` | Metadata model, serialization, validation, version checks |
-| `MapLibraryStore` | New folder-based storage; list metadata, read source/GeoJSON/style, active index, safe deletion |
+| `MapLibraryStore` | New folder-based storage; list metadata, read source/GeoJSON/style/overlay assets, active index, safe deletion |
 | `LegacyMapFileStore` | Old single-file storage only |
-| `MapImporter` | Source validation, parsing, GeoJSON/style/meta generation, staging, validation, atomic commit, progress events |
-| `MapLayerManager` | MapLibre source/layer IDs, source and layer lifecycle, ordering, visibility, opacity, style reset recovery |
+| `MapImporter` | Source validation, parsing, GeoJSON/style/meta/overlay generation, staging, validation, atomic commit, progress events |
+| `MapLayerManager` | MapLibre source/layer IDs, source and layer lifecycle, vector/raster ordering, visibility, opacity, style reset recovery |
 | `MapHomePage` | UI and orchestration only; migrate incrementally |
 
 The old `MapFileStore` facade may temporarily remain as a legacy adapter. During transition, `MapFileStore.remove(id)` must map only to legacy-file deletion. It must never fall through to deleting a new folder.
@@ -114,8 +120,25 @@ The old `MapFileStore` facade may temporarily remain as a legacy adapter. During
 - Parse Placemarks in a streaming/per-Placemark manner where practical to limit peak memory.
 - Preserve style references, ExtendedData, descriptions, and relevant attributes in GeoJSON properties.
 - Handle supported GroundOverlay content explicitly; unsupported cases must produce a clear import issue rather than silent loss.
+- Preserve each supported overlay image's original encoded bytes and image format; do not resize, recompress, or transcode it.
+- Preserve geographic bounds exactly as produced by the parser; do not round or recalculate them.
+- Preserve overlay name and source-document order. Unsupported rotation/altitude behavior or image references must produce a specific issue, never silent omission.
+- Do not fetch remote resources during offline import. Resolve KMZ-relative image references only from validated archive entries; reject archive path traversal and unsupported external references.
 - Preserve all coordinates and vertices exactly. Never simplify geometry.
 - Run CPU- and memory-intensive parsing off the UI isolate where supported.
+
+### GroundOverlay storage contract
+
+`overlays/overlays.json` is a JSON object with an `overlays` array in source-document order. Each entry contains:
+- `id`: generated safe identifier, unique within the map (for example `overlay_0001`).
+- `name`: display name from the source when available.
+- `file`: generated basename only; never a path supplied by KML/KMZ.
+- `imageFormat`: validated format/extension (for example `png` or `jpg`).
+- `bounds`: geographic bounds with numeric `north`, `south`, `east`, and `west` values copied without rounding from the parser result.
+
+The manifest must not contain absolute paths, `..`, separators, or arbitrary archive paths. The store must validate every manifest filename and canonical file path, reject symlinks/path escapes, and validate that the image bytes match the declared format. Overlay IDs and filenames are generated by the importer, not trusted from source names. An empty overlay collection is represented by the absence of the `overlays/` directory and manifest.
+
+`MapLibraryStore` must provide corresponding read/write operations for the manifest and individual image bytes. Reads return the original encoded bytes unchanged. Writes are confined to the map's staging/final folder and use the same temporary-file, flush, and safe-install discipline as other map assets. Map deletion removes the entire map folder, including overlays. Web memory storage must expose equivalent logical operations without claiming persistence.
 
 ### Generated files
 - `polygons.geojson`
@@ -123,6 +146,8 @@ The old `MapFileStore` facade may temporarily remain as a legacy adapter. During
 - `points.geojson`
 - `layer_style.json` generated by `MapImporter`, not supplied by the caller.
 - `meta.json`
+- `overlays/<generated-file-name>` for each supported GroundOverlay image
+- `overlays/overlays.json` when at least one supported GroundOverlay exists
 
 All three GeoJSON files are written even when empty. Empty files contain valid empty FeatureCollections.
 
@@ -135,8 +160,9 @@ Importer exposes a progress callback or stream with real stages:
 4. feature generation
 5. GeoJSON writes
 6. `layer_style.json` write
-7. metadata write
-8. output validation
+7. overlay image and manifest writes (when overlays exist)
+8. metadata write
+9. output validation
 9. atomic commit
 10. complete
 
@@ -165,7 +191,7 @@ UI must not display only a generic import-failed message when a specific stage i
 - No on-disk lease or marker file is required.
 - At startup, no import is active yet, so all directories under `.tmp/` are leftovers and may be cleaned.
 - During runtime, cleanup may remove only staging directories whose nonce is not active and which are older than the configured age threshold.
-- Validate all expected outputs, metadata, GeoJSON syntax, and feature counts before commit.
+- Validate all expected outputs, metadata, GeoJSON syntax, feature counts, overlay manifest entries, image file existence, and image format signatures before commit.
 - Rename the staging directory to the final `maps_library/<mapId>/` only if the final destination does not exist.
 - Never replace an existing final folder automatically.
 - An ID collision is a typed conflict error.
@@ -218,6 +244,8 @@ Create three stable style slots/anchors (polygon, line, point) once during style
 
 ### Sources and geometry
 - One source per map and geometry type.
+- Each GroundOverlay is represented by a separate raster source/layer (or a documented equivalent supported by the plugin); it is never encoded as GeoJSON.
+- Raster overlays render below vector geometry. Preserve source-document order within a map where the API permits deterministic ordering; validate actual rendered order on devices.
 - Polygon: source + fill + outline.
 - Line: source + line layer.
 - Point: source + circle layer.
@@ -231,12 +259,14 @@ Create three stable style slots/anchors (polygon, line, point) once during style
 For deactivation, deletion, and style/basemap replacement:
 - Await each `removeLayer` operation first.
 - Only after layer removal, await `removeSource`.
+- Remove each raster overlay layer before its corresponding raster source; isolate failures per overlay just as for vector geometry.
 - Isolate errors per map/geometry so one failed removal does not stop cleanup of other maps.
 - Log/report failed IDs and operations for diagnosis.
 
 ### Styling
 - Use MapLibre paint properties for opacity, fill, outline, and line styling.
 - Changing opacity or outline must not require rewriting GeoJSON.
+- Raster-overlay opacity and visibility changes use MapLibre paint/layout properties and never rewrite the image asset.
 - Debounce rapid style updates.
 - Persist user style configuration in `layer_style.json`.
 - Reattach sources/layers after style reset using the manager's known state.
@@ -281,7 +311,7 @@ Startup sequence:
 4. Read and validate `active_layers.json`; surface corruption/orphan IDs.
 5. Scan map folders and read only `meta.json`.
 6. Present valid maps and folder issues separately.
-7. Load GeoJSON only for maps that need to be activated/restored in MapLibre.
+7. Load GeoJSON and overlay manifest/image bytes only for maps that need to be activated/restored in MapLibre.
 
 Library UI:
 - Show valid maps and actionable issues.
@@ -331,6 +361,7 @@ At minimum, test the target Android 9 XCover4 and a modern Android device. iOS b
 
 - Original source is retained unless explicitly removed by a separate user-approved policy.
 - Geometry coordinates and vertex sequences are preserved exactly.
+- GroundOverlay image bytes/format and parsed geographic bounds are preserved; no implicit image transformation is allowed.
 - Existing final map folders are never overwritten by normal import.
 - Library listing reads metadata only.
 - Active state has one persistent source of truth.
