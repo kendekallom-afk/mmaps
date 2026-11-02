@@ -1,9 +1,11 @@
 import '../models/map_meta.dart';
 import '../models/map_library_item.dart';
+import '../models/map_library_active_index.dart';
 import 'map_library_store_memory.dart'
     if (dart.library.io) 'map_library_store_io.dart' as backend;
 
 export '../models/map_library_item.dart';
+export '../models/map_library_active_index.dart';
 
 /// Folder-based map storage. This is intentionally separate from the
 /// legacy single-file MapFileStore during the migration period.
@@ -21,4 +23,12 @@ abstract final class MapLibraryStore {
   /// Writes metadata to an existing map folder. This does not create or
   /// replace a map folder; folder creation belongs to the importer stage.
   static Future<void> writeMeta(MapMeta meta) => backend.writeMeta(meta);
+
+  /// Reads active IDs and reports valid IDs whose map folders are missing.
+  static Future<MapLibraryActiveIndex> readActiveMapIndex() =>
+      backend.readActiveMapIndex();
+
+  /// Replaces the active ID list. Corrupt existing data is never silently reset.
+  static Future<void> writeActiveMapIds(List<String> ids) =>
+      backend.writeActiveMapIds(ids);
 }
