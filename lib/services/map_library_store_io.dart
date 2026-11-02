@@ -28,13 +28,28 @@ Future<String> _validatedMapPath(String id) async {
   await root.create(recursive: true);
   final canonicalRoot = await root.resolveSymbolicLinks();
   final candidate = Directory(p.join(canonicalRoot, id));
-  final resolved = p.normalize(candidate.absolute.path);
+  final candidatePath = p.normalize(candidate.absolute.path);
   final expectedPrefix = p.normalize(canonicalRoot + Platform.pathSeparator);
 
-  if (!resolved.startsWith(expectedPrefix)) {
+  // An existing map folder may itself be a symbolic link. Resolve it before
+  // accessing metadata so a link cannot redirect reads/writes outside root.
+  final entityType = await FileSystemEntity.type(
+    candidatePath,
+    followLinks: false,
+  );
+  final resolved = entityType == FileSystemEntityType.link
+      ? await candidate.resolveSymbolicLinks()
+      : candidatePath;
+  final normalizedResolved = p.normalize(resolved);
+  final comparableResolved =
+      Platform.isWindows ? normalizedResolved.toLowerCase() : normalizedResolved;
+  final comparableRoot =
+      Platform.isWindows ? expectedPrefix.toLowerCase() : expectedPrefix;
+
+  if (!comparableResolved.startsWith(comparableRoot)) {
     throw FormatException('Map path escapes library root: $id');
   }
-  return resolved;
+  return normalizedResolved;
 }
 
 Future<List<MapLibraryItem>> listMaps() async {
@@ -101,11 +116,37 @@ Future<void> writeMeta(MapMeta meta) async {
 
   final target = File(p.join(mapPath, 'meta.json'));
   final temporary = File(p.join(mapPath, 'meta.json.tmp'));
+  final backup = File(
+    p.join(mapPath, 'meta.json.backup-${DateTime.now().microsecondsSinceEpoch}'),
+  );
+
+  // Write and flush the complete new file before touching the current one.
   await temporary.writeAsString(jsonEncode(meta.toJson()), flush: true);
 
-  // Replace metadata atomically where the platform filesystem supports rename.
-  if (await target.exists()) {
-    await target.delete();
+  var movedOriginal = false;
+  try {
+    if (await target.exists()) {
+      await target.rename(backup.path);
+      movedOriginal = true;
+    }
+
+    await temporary.rename(target.path);
+
+    // The new metadata is in place; the old copy is no longer needed.
+    if (movedOriginal && await backup.exists()) {
+      await backup.delete();
+    }
+  } catch (_) {
+    // If installation of the new file fails, restore the old metadata.
+    if (movedOriginal &&
+        await backup.exists() &&
+        !await target.exists()) {
+      await backup.rename(target.path);
+    }
+    rethrow;
+  } finally {
+    if (await temporary.exists()) {
+      await temporary.delete();
+    }
   }
-  await temporary.rename(target.path);
 }

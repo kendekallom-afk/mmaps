@@ -83,6 +83,23 @@ void main() {
       expect(loaded.polygonCount, 3);
     });
 
+    test('replaces existing metadata and keeps the new value readable', () async {
+      await MapLibraryStore.initialize();
+      await Directory(p.join(libraryDirectory.path, 'map_001'))
+          .create(recursive: true);
+
+      await MapLibraryStore.writeMeta(sampleMeta(name: 'Nama Lama'));
+      await MapLibraryStore.writeMeta(sampleMeta(name: 'Nama Baru'));
+
+      final loaded = await MapLibraryStore.readMeta('map_001');
+      expect(loaded.name, 'Nama Baru');
+      expect(
+        await File(p.join(libraryDirectory.path, 'map_001', 'meta.json'))
+            .exists(),
+        isTrue,
+      );
+    });
+
     test('lists metadata only and skips internal directories', () async {
       await MapLibraryStore.initialize();
       final mapFolder =
