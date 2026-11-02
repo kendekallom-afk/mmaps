@@ -245,6 +245,44 @@ Future<void> writeGeoJson(String id, String geometry, String content) async {
   }
 }
 
+
+void _validateLayerStyle(String content) {
+  final decoded = jsonDecode(content);
+  if (decoded is! Map<String, dynamic>) {
+    throw const FormatException('layer_style.json must contain a JSON object');
+  }
+}
+
+Future<String> readLayerStyle(String id) async {
+  final mapPath = await _validatedMapPath(id);
+  if (!await Directory(mapPath).exists()) {
+    throw StateError('Map folder not found: $id');
+  }
+  final file = File(p.join(mapPath, 'layer_style.json'));
+  if (!await file.exists()) {
+    throw StateError('layer_style.json not found for map: $id');
+  }
+  final content = await file.readAsString();
+  _validateLayerStyle(content);
+  return content;
+}
+
+Future<void> writeLayerStyle(String id, String content) async {
+  final mapPath = await _validatedMapPath(id);
+  if (!await Directory(mapPath).exists()) {
+    throw StateError('Map folder does not exist: $id');
+  }
+  _validateLayerStyle(content);
+  final target = File(p.join(mapPath, 'layer_style.json'));
+  final temporary = File(p.join(mapPath, 'layer_style.json.tmp'));
+  await temporary.writeAsString(content, flush: true);
+  try {
+    await temporary.rename(target.path);
+  } finally {
+    if (await temporary.exists()) await temporary.delete();
+  }
+}
+
 Future<MapLibraryActiveIndex> readActiveMapIndex() async {
   final root = await _rootDirectory();
   await root.create(recursive: true);

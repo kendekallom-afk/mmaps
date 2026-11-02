@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'dart:convert';
+
 import '../models/map_library_item.dart';
 import '../models/map_library_active_index.dart';
 import '../models/map_meta.dart';
@@ -103,4 +105,29 @@ Future<void> writeGeoJson(String id, String geometry, String content) async {
   final key = _geoJsonKey(geometry);
   _validateFeatureCollection(content);
   (_geoJsonFiles[id] ??= {})[key] = content;
+}
+
+final Map<String, String> _layerStyles = {};
+
+void _validateLayerStyle(String content) {
+  final decoded = jsonDecode(content);
+  if (decoded is! Map<String, dynamic>) {
+    throw const FormatException('layer_style.json must contain a JSON object');
+  }
+}
+
+Future<String> readLayerStyle(String id) async {
+  if (!MapMeta.isValidId(id)) throw FormatException('Invalid map ID: $id');
+  if (!_metadata.containsKey(id)) throw StateError('Map not found: $id');
+  final content = _layerStyles[id];
+  if (content == null) throw StateError('layer_style.json not found for map: $id');
+  _validateLayerStyle(content);
+  return content;
+}
+
+Future<void> writeLayerStyle(String id, String content) async {
+  if (!MapMeta.isValidId(id)) throw FormatException('Invalid map ID: $id');
+  if (!_metadata.containsKey(id)) throw StateError('Map not found: $id');
+  _validateLayerStyle(content);
+  _layerStyles[id] = content;
 }
