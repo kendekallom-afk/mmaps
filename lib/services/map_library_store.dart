@@ -32,6 +32,17 @@ abstract final class MapLibraryStore {
   static Future<void> writeOriginalSource(String id, List<int> bytes) =>
       backend.writeOriginalSource(id, bytes);
 
+  /// Reads one geometry GeoJSON file (polygons, lines, or points).
+  static Future<String> readGeoJson(String id, String geometry) =>
+      backend.readGeoJson(id, geometry);
+
+  /// Writes one valid GeoJSON FeatureCollection for the selected geometry.
+  static Future<void> writeGeoJson(
+    String id,
+    String geometry,
+    String content,
+  ) => backend.writeGeoJson(id, geometry, content);
+
   /// Reads active IDs and reports valid IDs whose map folders are missing.
   static Future<MapLibraryActiveIndex> readActiveMapIndex() =>
       backend.readActiveMapIndex();
