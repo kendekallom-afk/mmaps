@@ -31,25 +31,26 @@ void main() {
     String id = 'map_001',
     String name = 'Peta Uji',
     String extension = 'kmz',
-  }) =>
-      MapMeta(
-        id: id,
-        formatVersion: MapMeta.currentFormatVersion,
-        name: name,
-        originalExtension: extension,
-        importedAt: DateTime.utc(2026, 10, 1),
-        polygonCount: 3,
-        lineCount: 2,
-        pointCount: 1,
-        bounds: const [118.0, -3.0, 119.0, -2.0],
-      );
+  }) => MapMeta(
+    id: id,
+    formatVersion: MapMeta.currentFormatVersion,
+    name: name,
+    originalExtension: extension,
+    importedAt: DateTime.utc(2026, 10, 1),
+    polygonCount: 3,
+    lineCount: 2,
+    pointCount: 1,
+    bounds: const [118.0, -3.0, 119.0, -2.0],
+  );
 
   setUp(() async {
-    supportDirectory =
-        await Directory.systemTemp.createTemp('mmaps_library_test_');
+    supportDirectory = await Directory.systemTemp.createTemp(
+      'mmaps_library_test_',
+    );
     libraryDirectory = Directory(p.join(supportDirectory.path, 'maps_library'));
-    PathProviderPlatform.instance =
-        FakePathProviderPlatform(supportDirectory.path);
+    PathProviderPlatform.instance = FakePathProviderPlatform(
+      supportDirectory.path,
+    );
   });
 
   tearDown(() async {
@@ -63,8 +64,10 @@ void main() {
       await MapLibraryStore.initialize();
 
       expect(await libraryDirectory.exists(), isTrue);
-      expect(Directory(p.join(libraryDirectory.path, '.tmp')).existsSync(),
-          isTrue);
+      expect(
+        Directory(p.join(libraryDirectory.path, '.tmp')).existsSync(),
+        isTrue,
+      );
       expect(
         Directory(p.join(libraryDirectory.path, '.deleting')).existsSync(),
         isTrue,
@@ -84,27 +87,29 @@ void main() {
       expect(loaded.polygonCount, 3);
     });
 
-    test('replaces existing metadata and keeps the new value readable', () async {
-      await MapLibraryStore.initialize();
-      await Directory(p.join(libraryDirectory.path, 'map_001'))
-          .create(recursive: true);
+    test(
+      'replaces existing metadata and keeps the new value readable',
+      () async {
+        await MapLibraryStore.initialize();
+        await Directory(p.join(libraryDirectory.path, 'map_001'))
+            .create(recursive: true);
 
-      await MapLibraryStore.writeMeta(sampleMeta(name: 'Nama Lama'));
-      await MapLibraryStore.writeMeta(sampleMeta(name: 'Nama Baru'));
+        await MapLibraryStore.writeMeta(sampleMeta(name: 'Nama Lama'));
+        await MapLibraryStore.writeMeta(sampleMeta(name: 'Nama Baru'));
 
-      final loaded = await MapLibraryStore.readMeta('map_001');
-      expect(loaded.name, 'Nama Baru');
-      expect(
-        await File(p.join(libraryDirectory.path, 'map_001', 'meta.json'))
-            .exists(),
-        isTrue,
-      );
-    });
+        final loaded = await MapLibraryStore.readMeta('map_001');
+        expect(loaded.name, 'Nama Baru');
+        expect(
+          await File(p.join(libraryDirectory.path, 'map_001', 'meta.json'))
+              .exists(),
+          isTrue,
+        );
+      },
+    );
 
     test('lists metadata only and skips internal directories', () async {
       await MapLibraryStore.initialize();
-      final mapFolder =
-          Directory(p.join(libraryDirectory.path, 'map_001'));
+      final mapFolder = Directory(p.join(libraryDirectory.path, 'map_001'));
       await mapFolder.create(recursive: true);
       await File(p.join(mapFolder.path, 'polygons.geojson'))
           .writeAsString('this is deliberately not valid JSON');
@@ -139,10 +144,7 @@ void main() {
       final items = await MapLibraryStore.listMaps();
 
       expect(items.single.isValid, isFalse);
-      expect(
-        () => MapLibraryStore.readMeta('map_001'),
-        throwsFormatException,
-      );
+      expect(() => MapLibraryStore.readMeta('map_001'), throwsFormatException);
     });
 
     test('reports malformed metadata as a damaged map entry', () async {
@@ -205,7 +207,9 @@ void main() {
         final folder = Directory(p.join(libraryDirectory.path, 'map_001'));
         await folder.create(recursive: true);
         await MapLibraryStore.writeMeta(sampleMeta());
-        final outside = await Directory.systemTemp.createTemp('mmaps_file_link_');
+        final outside = await Directory.systemTemp.createTemp(
+          'mmaps_file_link_',
+        );
         addTearDown(() async {
           if (await outside.exists()) await outside.delete(recursive: true);
         });
@@ -217,35 +221,52 @@ void main() {
         }
 
         await linkFile('meta.json');
-        await expectLater(MapLibraryStore.readMeta('map_001'),
-            throwsA(isA<FileSystemException>()));
-        await expectLater(MapLibraryStore.writeMeta(sampleMeta(name: 'Changed')),
-            throwsA(isA<FileSystemException>()));
+        await expectLater(
+          MapLibraryStore.readMeta('map_001'),
+          throwsA(isA<FileSystemException>()),
+        );
+        await expectLater(
+          MapLibraryStore.writeMeta(sampleMeta(name: 'Changed')),
+          throwsA(isA<FileSystemException>()),
+        );
         await Link(p.join(folder.path, 'meta.json')).delete();
         await MapLibraryStore.writeMeta(sampleMeta());
 
         await linkFile('original.kmz');
-        await expectLater(MapLibraryStore.readOriginalSource('map_001'),
-            throwsA(isA<FileSystemException>()));
-        await expectLater(MapLibraryStore.writeOriginalSource('map_001', [1, 2]),
-            throwsA(isA<FileSystemException>()));
+        await expectLater(
+          MapLibraryStore.readOriginalSource('map_001'),
+          throwsA(isA<FileSystemException>()),
+        );
+        await expectLater(
+          MapLibraryStore.writeOriginalSource('map_001', [1, 2]),
+          throwsA(isA<FileSystemException>()),
+        );
         await Link(p.join(folder.path, 'original.kmz')).delete();
 
         await linkFile('points.geojson');
-        await expectLater(MapLibraryStore.readGeoJson('map_001', 'points'),
-            throwsA(isA<FileSystemException>()));
         await expectLater(
-          MapLibraryStore.writeGeoJson('map_001', 'points',
-              '{"type":"FeatureCollection","features":[]}'),
+          MapLibraryStore.readGeoJson('map_001', 'points'),
+          throwsA(isA<FileSystemException>()),
+        );
+        await expectLater(
+          MapLibraryStore.writeGeoJson(
+            'map_001',
+            'points',
+            '{"type":"FeatureCollection","features":[]}',
+          ),
           throwsA(isA<FileSystemException>()),
         );
         await Link(p.join(folder.path, 'points.geojson')).delete();
 
         await linkFile('layer_style.json');
-        await expectLater(MapLibraryStore.readLayerStyle('map_001'),
-            throwsA(isA<FileSystemException>()));
-        await expectLater(MapLibraryStore.writeLayerStyle('map_001', '{}'),
-            throwsA(isA<FileSystemException>()));
+        await expectLater(
+          MapLibraryStore.readLayerStyle('map_001'),
+          throwsA(isA<FileSystemException>()),
+        );
+        await expectLater(
+          MapLibraryStore.writeLayerStyle('map_001', '{}'),
+          throwsA(isA<FileSystemException>()),
+        );
       },
       skip: Platform.isWindows
           ? 'Windows symlink creation may require Developer Mode or elevation'
@@ -274,15 +295,10 @@ void main() {
       await MapLibraryStore.initialize();
       await Directory(p.join(libraryDirectory.path, 'map_001'))
           .create(recursive: true);
-      await MapLibraryStore.writeMeta(
-        sampleMeta(extension: 'kml'),
-      );
+      await MapLibraryStore.writeMeta(sampleMeta(extension: 'kml'));
       const source = '<kml><Document/></kml>';
 
-      await MapLibraryStore.writeOriginalSource(
-        'map_001',
-        source.codeUnits,
-      );
+      await MapLibraryStore.writeOriginalSource('map_001', source.codeUnits);
       final loaded = await MapLibraryStore.readOriginalSource('map_001');
 
       expect(String.fromCharCodes(loaded), source);
@@ -299,10 +315,7 @@ void main() {
           .create(recursive: true);
       await MapLibraryStore.writeMeta(sampleMeta());
 
-      expect(
-        MapLibraryStore.readOriginalSource('map_001'),
-        throwsStateError,
-      );
+      expect(MapLibraryStore.readOriginalSource('map_001'), throwsStateError);
     });
 
     test('rejects writing original source for missing map folder', () async {
@@ -313,7 +326,6 @@ void main() {
       );
     });
 
-
     test('writes and reads all three GeoJSON FeatureCollections', () async {
       await MapLibraryStore.initialize();
       await Directory(p.join(libraryDirectory.path, 'map_001'))
@@ -323,16 +335,11 @@ void main() {
       const empty = '{"type":"FeatureCollection","features":[]}';
       for (final geometry in ['polygons', 'lines', 'points']) {
         await MapLibraryStore.writeGeoJson('map_001', geometry, empty);
+        expect(await MapLibraryStore.readGeoJson('map_001', geometry), empty);
         expect(
-          await MapLibraryStore.readGeoJson('map_001', geometry),
-          empty,
-        );
-        expect(
-          await File(p.join(
-            libraryDirectory.path,
-            'map_001',
-            '$geometry.geojson',
-          )).exists(),
+          await File(
+            p.join(libraryDirectory.path, 'map_001', '$geometry.geojson'),
+          ).exists(),
           isTrue,
         );
       }
@@ -343,7 +350,8 @@ void main() {
       await Directory(p.join(libraryDirectory.path, 'map_001'))
           .create(recursive: true);
       await MapLibraryStore.writeMeta(sampleMeta());
-      const source = '{"type":"FeatureCollection","features":['
+      const source =
+          '{"type":"FeatureCollection","features":['
           '{"type":"Feature","properties":{},"geometry":{"type":"LineString",'
           '"coordinates":[[118.123456789,-2.123456789],[119.987654321,-3.987654321]]}}]}';
 
@@ -362,7 +370,11 @@ void main() {
         throwsFormatException,
       );
       expect(
-        () => MapLibraryStore.writeGeoJson('map_001', 'points', '{"type":"FeatureCollection"}'),
+        () => MapLibraryStore.writeGeoJson(
+          'map_001',
+          'points',
+          '{"type":"FeatureCollection"}',
+        ),
         throwsFormatException,
       );
     });
@@ -379,13 +391,13 @@ void main() {
       );
     });
 
-
     test('writes and reads per-map layer style JSON', () async {
       await MapLibraryStore.initialize();
       await Directory(p.join(libraryDirectory.path, 'map_001'))
           .create(recursive: true);
       await MapLibraryStore.writeMeta(sampleMeta());
-      const style = '{"polygon":{"fill":"#338855","opacity":0.4},'
+      const style =
+          '{"polygon":{"fill":"#338855","opacity":0.4},'
           '"line":{"color":"#112233","width":2},"point":{"visible":true}}';
 
       await MapLibraryStore.writeLayerStyle('map_001', style);
@@ -419,24 +431,28 @@ void main() {
           .create(recursive: true);
       await MapLibraryStore.writeMeta(sampleMeta());
 
-      expect(
-        MapLibraryStore.readLayerStyle('map_001'),
-        throwsStateError,
-      );
+      expect(MapLibraryStore.readLayerStyle('map_001'), throwsStateError);
     });
 
+    test(
+      'replaces an existing original source without losing the new bytes',
+      () async {
+        await MapLibraryStore.initialize();
+        await Directory(p.join(libraryDirectory.path, 'map_001'))
+            .create(recursive: true);
+        await MapLibraryStore.writeMeta(sampleMeta());
 
-    test('replaces an existing original source without losing the new bytes', () async {
-      await MapLibraryStore.initialize();
-      await Directory(p.join(libraryDirectory.path, 'map_001'))
-          .create(recursive: true);
-      await MapLibraryStore.writeMeta(sampleMeta());
+        await MapLibraryStore.writeOriginalSource('map_001', [1, 2, 3]);
+        await MapLibraryStore.writeOriginalSource('map_001', [9, 8, 7, 6]);
 
-      await MapLibraryStore.writeOriginalSource('map_001', [1, 2, 3]);
-      await MapLibraryStore.writeOriginalSource('map_001', [9, 8, 7, 6]);
-
-      expect(await MapLibraryStore.readOriginalSource('map_001'), [9, 8, 7, 6]);
-    });
+        expect(await MapLibraryStore.readOriginalSource('map_001'), [
+          9,
+          8,
+          7,
+          6,
+        ]);
+      },
+    );
 
     test('replaces an existing GeoJSON file and preserves exact content', () async {
       await MapLibraryStore.initialize();
@@ -445,26 +461,33 @@ void main() {
       await MapLibraryStore.writeMeta(sampleMeta());
 
       const oldContent = '{"type":"FeatureCollection","features":[]}';
-      const newContent = '{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"v":2},"geometry":null}]}';
+      const newContent =
+          '{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"v":2},"geometry":null}]}';
       await MapLibraryStore.writeGeoJson('map_001', 'points', oldContent);
       await MapLibraryStore.writeGeoJson('map_001', 'points', newContent);
 
-      expect(await MapLibraryStore.readGeoJson('map_001', 'points'), newContent);
+      expect(
+        await MapLibraryStore.readGeoJson('map_001', 'points'),
+        newContent,
+      );
     });
 
-    test('replaces an existing layer style file and preserves exact content', () async {
-      await MapLibraryStore.initialize();
-      await Directory(p.join(libraryDirectory.path, 'map_001'))
-          .create(recursive: true);
-      await MapLibraryStore.writeMeta(sampleMeta());
+    test(
+      'replaces an existing layer style file and preserves exact content',
+      () async {
+        await MapLibraryStore.initialize();
+        await Directory(p.join(libraryDirectory.path, 'map_001'))
+            .create(recursive: true);
+        await MapLibraryStore.writeMeta(sampleMeta());
 
-      const oldStyle = '{"version":1}';
-      const newStyle = '{"version":2,"visible":false}';
-      await MapLibraryStore.writeLayerStyle('map_001', oldStyle);
-      await MapLibraryStore.writeLayerStyle('map_001', newStyle);
+        const oldStyle = '{"version":1}';
+        const newStyle = '{"version":2,"visible":false}';
+        await MapLibraryStore.writeLayerStyle('map_001', oldStyle);
+        await MapLibraryStore.writeLayerStyle('map_001', newStyle);
 
-      expect(await MapLibraryStore.readLayerStyle('map_001'), newStyle);
-    });
+        expect(await MapLibraryStore.readLayerStyle('map_001'), newStyle);
+      },
+    );
 
     test('reads empty active index when no file exists', () async {
       await MapLibraryStore.initialize();
@@ -513,14 +536,19 @@ void main() {
     test('rejects invalid IDs before accessing storage', () async {
       await MapLibraryStore.initialize();
 
-      expect(() => MapLibraryStore.readMeta('../escape'), throwsFormatException);
+      expect(
+        () => MapLibraryStore.readMeta('../escape'),
+        throwsFormatException,
+      );
     });
 
     test('startup restores backup when target file is missing', () async {
       final folder = Directory(p.join(libraryDirectory.path, 'map_001'));
       await folder.create(recursive: true);
       final backup = File(p.join(folder.path, 'meta.json.backup-100'));
-      await backup.writeAsString(jsonEncode(sampleMeta(name: 'Recovered').toJson()));
+      await backup.writeAsString(
+        jsonEncode(sampleMeta(name: 'Recovered').toJson()),
+      );
 
       await MapLibraryStore.initialize();
 
@@ -528,26 +556,37 @@ void main() {
       expect(await backup.exists(), isFalse);
     });
 
-    test('startup keeps existing target and removes stale backup and temp', () async {
-      final folder = Directory(p.join(libraryDirectory.path, 'map_001'));
-      await folder.create(recursive: true);
-      final target = File(p.join(folder.path, 'meta.json'));
-      final backup = File(p.join(folder.path, 'meta.json.backup-100'));
-      final temporary = File(p.join(folder.path, 'meta.json.tmp'));
-      await target.writeAsString(jsonEncode(sampleMeta(name: 'Current').toJson()));
-      await backup.writeAsString(jsonEncode(sampleMeta(name: 'Old').toJson()));
-      await temporary.writeAsString('incomplete');
+    test(
+      'startup keeps existing target and removes stale backup and temp',
+      () async {
+        final folder = Directory(p.join(libraryDirectory.path, 'map_001'));
+        await folder.create(recursive: true);
+        final target = File(p.join(folder.path, 'meta.json'));
+        final backup = File(p.join(folder.path, 'meta.json.backup-100'));
+        final temporary = File(p.join(folder.path, 'meta.json.tmp'));
+        await target.writeAsString(
+          jsonEncode(sampleMeta(name: 'Current').toJson()),
+        );
+        await backup.writeAsString(
+          jsonEncode(sampleMeta(name: 'Old').toJson()),
+        );
+        await temporary.writeAsString('incomplete');
 
-      await MapLibraryStore.initialize();
+        await MapLibraryStore.initialize();
 
-      expect((await MapLibraryStore.readMeta('map_001')).name, 'Current');
-      expect(await backup.exists(), isFalse);
-      expect(await temporary.exists(), isFalse);
-    });
+        expect((await MapLibraryStore.readMeta('map_001')).name, 'Current');
+        expect(await backup.exists(), isFalse);
+        expect(await temporary.exists(), isFalse);
+      },
+    );
 
     test('startup cleans abandoned staging and deleting folders', () async {
-      final staging = Directory(p.join(libraryDirectory.path, '.tmp', 'map_001-nonce'));
-      final deleting = Directory(p.join(libraryDirectory.path, '.deleting', 'map_002-nonce'));
+      final staging = Directory(
+        p.join(libraryDirectory.path, '.tmp', 'map_001-nonce'),
+      );
+      final deleting = Directory(
+        p.join(libraryDirectory.path, '.deleting', 'map_002-nonce'),
+      );
       await staging.create(recursive: true);
       await deleting.create(recursive: true);
       await File(p.join(staging.path, 'partial')).writeAsString('partial');
@@ -555,12 +594,23 @@ void main() {
 
       await MapLibraryStore.initialize();
 
-      expect((await Directory(p.join(libraryDirectory.path, '.tmp')).list()).isEmpty, isTrue);
-      expect((await Directory(p.join(libraryDirectory.path, '.deleting')).list()).isEmpty, isTrue);
+      expect(
+        await Directory(p.join(libraryDirectory.path, '.tmp')).list().isEmpty,
+        isTrue,
+      );
+
+      expect(
+        await Directory(p.join(libraryDirectory.path, '.deleting'))
+            .list()
+            .isEmpty,
+        isTrue,
+      );
     });
 
     test('startup restores active index backup if target is missing', () async {
-      final backup = File(p.join(libraryDirectory.path, 'active_layers.json.backup-100'));
+      final backup = File(
+        p.join(libraryDirectory.path, 'active_layers.json.backup-100'),
+      );
       await libraryDirectory.create(recursive: true);
       await backup.writeAsString(jsonEncode(['map_001']));
 
@@ -569,6 +619,46 @@ void main() {
       expect((await MapLibraryStore.readActiveMapIndex()).mapIds, ['map_001']);
       expect(await backup.exists(), isFalse);
     });
+    test('startup ignores unknown backup files', () async {
+      final unknownBackup = File(
+        p.join(libraryDirectory.path, 'file_asing.backup-123456'),
+      );
 
+      await libraryDirectory.create(recursive: true);
+      await unknownBackup.writeAsString('data asing');
+
+      await MapLibraryStore.initialize();
+
+      expect(
+        await unknownBackup.exists(),
+        isTrue,
+        reason: 'Unknown backup files must not be modified',
+      );
+
+      expect(
+        await File(p.join(libraryDirectory.path, 'file_asing')).exists(),
+        isFalse,
+      );
+    });
+
+    test('startup rejects backup when target is a directory', () async {
+      final mapFolder = Directory(p.join(libraryDirectory.path, 'map_001'));
+
+      final target = Directory(p.join(mapFolder.path, 'meta.json'));
+
+      final backup = File(p.join(mapFolder.path, 'meta.json.backup-123456'));
+
+      await mapFolder.create(recursive: true);
+      await target.create(recursive: true);
+      await backup.writeAsString('backup data');
+
+      await expectLater(
+        MapLibraryStore.initialize(),
+        throwsA(isA<FileSystemException>()),
+      );
+
+      expect(await target.exists(), isTrue);
+      expect(await backup.exists(), isTrue);
+    });
   });
 }

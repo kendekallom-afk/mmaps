@@ -8,7 +8,6 @@ import '../models/map_library_item.dart';
 import '../models/map_library_active_index.dart';
 import '../models/map_meta.dart';
 
-
 /// Installs a fully-written temporary file while preserving the previous
 /// target until the new file has been moved into place. The backup/restore
 /// sequence also supports platforms where rename cannot replace an existing
@@ -45,7 +44,10 @@ Future<void> _installTemporaryFile(File temporary, File target) async {
 Future<void> _rejectSymbolicLink(String path) async {
   final type = await FileSystemEntity.type(path, followLinks: false);
   if (type == FileSystemEntityType.link) {
-    throw FileSystemException('Symbolic links are not allowed in map folders', path);
+    throw FileSystemException(
+      'Symbolic links are not allowed in map folders',
+      path,
+    );
   }
 }
 
@@ -57,44 +59,79 @@ Future<Directory> _rootDirectory() async {
 /// Recovers interrupted single-file replacements before normal library reads.
 /// If the target exists, installation reached its commit point and backups are
 /// stale. If it is absent, restore the newest backup before removing leftovers.
-Future<void> _recoverBackupFiles(Directory folder) async {
+Future<void> _recoverBackupFiles(
+  Directory folder, {
+  required Set<String> allowedTargets,
+}) async {
   if (!await folder.exists()) return;
+
   final backups = <String, List<File>>{};
 
   await for (final entity in folder.list(followLinks: false)) {
     if (entity is! File) continue;
+
     final name = p.basename(entity.path);
     final marker = name.lastIndexOf('.backup-');
+
     if (marker <= 0) continue;
+
+    final targetName = name.substring(0, marker);
+
+    // Backup yang bukan milik file resmi tidak disentuh.
+    if (!allowedTargets.contains(targetName)) continue;
+
     final suffix = name.substring(marker + '.backup-'.length);
     if (int.tryParse(suffix) == null) continue;
+
     await _rejectSymbolicLink(entity.path);
-    backups.putIfAbsent(name.substring(0, marker), () => <File>[]).add(entity);
+
+    backups.putIfAbsent(targetName, () => <File>[]).add(entity);
   }
 
   for (final entry in backups.entries) {
     final target = File(p.join(folder.path, entry.key));
+
     await _rejectSymbolicLink(target.path);
+
+    final targetType = await FileSystemEntity.type(
+      target.path,
+      followLinks: false,
+    );
+
+    if (targetType != FileSystemEntityType.notFound &&
+        targetType != FileSystemEntityType.file) {
+      throw FileSystemException(
+        'Backup recovery target is not a regular file',
+        target.path,
+      );
+    }
+
     final candidates = entry.value
       ..sort((a, b) {
-        final aStamp = int.tryParse(a.path.split('.backup-').last) ?? 0;
-        final bStamp = int.tryParse(b.path.split('.backup-').last) ?? 0;
+        final aStamp =
+            int.tryParse(p.basename(a.path).split('.backup-').last) ?? 0;
+        final bStamp =
+            int.tryParse(p.basename(b.path).split('.backup-').last) ?? 0;
+
         return bStamp.compareTo(aStamp);
       });
 
-    if (!await target.exists()) {
-      // Restore one known previous version. Never promote an uncommitted .tmp.
+    if (targetType == FileSystemEntityType.notFound) {
       await candidates.first.rename(target.path);
       candidates.removeAt(0);
     }
+
     for (final backup in candidates) {
-      if (await backup.exists()) await backup.delete();
+      if (await backup.exists()) {
+        await backup.delete();
+      }
     }
   }
 
-  // A .tmp sibling is never authoritative; the target or backup is safer.
+  // File .tmp bukan file resmi dan tidak pernah dipulihkan.
   await for (final entity in folder.list(followLinks: false)) {
     if (entity is! File) continue;
+
     if (p.basename(entity.path).endsWith('.tmp')) {
       await _rejectSymbolicLink(entity.path);
       await entity.delete();
@@ -106,8 +143,10 @@ Future<void> _recoverBackupFiles(Directory folder) async {
 Future<void> _emptyInternalDirectory(Directory directory) async {
   if (await FileSystemEntity.type(directory.path, followLinks: false) ==
       FileSystemEntityType.link) {
-    throw FileSystemException('Internal library directory cannot be a link',
-        directory.path);
+    throw FileSystemException(
+      'Internal library directory cannot be a link',
+      directory.path,
+    );
   }
   await directory.create(recursive: true);
   await for (final entity in directory.list(followLinks: false)) {
@@ -125,15 +164,28 @@ Future<void> initializeLibrary() async {
   final root = await _rootDirectory();
   await root.create(recursive: true);
 
-  // Recover the active index and per-map files before deleting temporary data.
-  await _recoverBackupFiles(root);
+  // Root hanya boleh memulihkan active_layers.json.
+  await _recoverBackupFiles(root, allowedTargets: {'active_layers.json'});
+
+  // Folder peta hanya boleh memulihkan file resmi.
+  const allowedMapFiles = {
+    'meta.json',
+    'original.kml',
+    'original.kmz',
+    'polygons.geojson',
+    'lines.geojson',
+    'points.geojson',
+    'layer_style.json',
+  };
+
   await for (final entity in root.list(followLinks: false)) {
     if (entity is Directory && !p.basename(entity.path).startsWith('.')) {
-      await _recoverBackupFiles(entity);
+      await _recoverBackupFiles(entity, allowedTargets: allowedMapFiles);
     }
   }
 
   await _emptyInternalDirectory(Directory(p.join(root.path, '.tmp')));
+
   await _emptyInternalDirectory(Directory(p.join(root.path, '.deleting')));
 }
 
@@ -159,10 +211,12 @@ Future<String> _validatedMapPath(String id) async {
       ? await candidate.resolveSymbolicLinks()
       : candidatePath;
   final normalizedResolved = p.normalize(resolved);
-  final comparableResolved =
-      Platform.isWindows ? normalizedResolved.toLowerCase() : normalizedResolved;
-  final comparableRoot =
-      Platform.isWindows ? expectedPrefix.toLowerCase() : expectedPrefix;
+  final comparableResolved = Platform.isWindows
+      ? normalizedResolved.toLowerCase()
+      : normalizedResolved;
+  final comparableRoot = Platform.isWindows
+      ? expectedPrefix.toLowerCase()
+      : expectedPrefix;
 
   if (!comparableResolved.startsWith(comparableRoot)) {
     throw FormatException('Map path escapes library root: $id');
@@ -241,7 +295,10 @@ Future<void> writeMeta(MapMeta meta) async {
   final target = File(targetPath);
   final temporary = File(temporaryPath);
   final backup = File(
-    p.join(mapPath, 'meta.json.backup-${DateTime.now().microsecondsSinceEpoch}'),
+    p.join(
+      mapPath,
+      'meta.json.backup-${DateTime.now().microsecondsSinceEpoch}',
+    ),
   );
 
   // Write and flush the complete new file before touching the current one.
@@ -262,9 +319,7 @@ Future<void> writeMeta(MapMeta meta) async {
     }
   } catch (_) {
     // If installation of the new file fails, restore the old metadata.
-    if (movedOriginal &&
-        await backup.exists() &&
-        !await target.exists()) {
+    if (movedOriginal && await backup.exists() && !await target.exists()) {
       await backup.rename(target.path);
     }
     rethrow;
@@ -312,7 +367,6 @@ Future<void> writeOriginalSource(String id, List<int> bytes) async {
   await temporary.writeAsBytes(bytes, flush: true);
   await _installTemporaryFile(temporary, target);
 }
-
 
 String _geoJsonFileName(String geometry) {
   switch (geometry) {
@@ -372,7 +426,6 @@ Future<void> writeGeoJson(String id, String geometry, String content) async {
   await _installTemporaryFile(temporary, target);
 }
 
-
 void _validateLayerStyle(String content) {
   final decoded = jsonDecode(content);
   if (decoded is! Map<String, dynamic>) {
@@ -428,7 +481,9 @@ Future<MapLibraryActiveIndex> readActiveMapIndex() async {
   final seen = <String>{};
   for (final value in decoded) {
     if (value is! String || !MapMeta.isValidId(value)) {
-      throw const FormatException('active_layers.json contains an invalid map ID');
+      throw const FormatException(
+        'active_layers.json contains an invalid map ID',
+      );
     }
     if (!seen.add(value)) {
       throw FormatException('active_layers.json contains duplicate ID: $value');
@@ -460,7 +515,10 @@ Future<void> writeActiveMapIds(List<String> ids) async {
   final target = File(p.join(root.path, 'active_layers.json'));
   final temporary = File(p.join(root.path, 'active_layers.json.tmp'));
   final backup = File(
-    p.join(root.path, 'active_layers.json.backup-${DateTime.now().microsecondsSinceEpoch}'),
+    p.join(
+      root.path,
+      'active_layers.json.backup-${DateTime.now().microsecondsSinceEpoch}',
+    ),
   );
 
   // Validate existing content before replacing it. Corruption requires
