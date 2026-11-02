@@ -1,7 +1,5 @@
 import 'dart:convert';
 
-import 'dart:convert';
-
 import '../models/map_library_item.dart';
 import '../models/map_library_active_index.dart';
 import '../models/map_meta.dart';

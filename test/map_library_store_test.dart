@@ -371,6 +371,47 @@ void main() {
       );
     });
 
+
+    test('replaces an existing original source without losing the new bytes', () async {
+      await MapLibraryStore.initialize();
+      await Directory(p.join(libraryDirectory.path, 'map_001'))
+          .create(recursive: true);
+      await MapLibraryStore.writeMeta(sampleMeta());
+
+      await MapLibraryStore.writeOriginalSource('map_001', [1, 2, 3]);
+      await MapLibraryStore.writeOriginalSource('map_001', [9, 8, 7, 6]);
+
+      expect(await MapLibraryStore.readOriginalSource('map_001'), [9, 8, 7, 6]);
+    });
+
+    test('replaces an existing GeoJSON file and preserves exact content', () async {
+      await MapLibraryStore.initialize();
+      await Directory(p.join(libraryDirectory.path, 'map_001'))
+          .create(recursive: true);
+      await MapLibraryStore.writeMeta(sampleMeta());
+
+      const oldContent = '{"type":"FeatureCollection","features":[]}';
+      const newContent = '{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"v":2},"geometry":null}]}';
+      await MapLibraryStore.writeGeoJson('map_001', 'points', oldContent);
+      await MapLibraryStore.writeGeoJson('map_001', 'points', newContent);
+
+      expect(await MapLibraryStore.readGeoJson('map_001', 'points'), newContent);
+    });
+
+    test('replaces an existing layer style file and preserves exact content', () async {
+      await MapLibraryStore.initialize();
+      await Directory(p.join(libraryDirectory.path, 'map_001'))
+          .create(recursive: true);
+      await MapLibraryStore.writeMeta(sampleMeta());
+
+      const oldStyle = '{"version":1}';
+      const newStyle = '{"version":2,"visible":false}';
+      await MapLibraryStore.writeLayerStyle('map_001', oldStyle);
+      await MapLibraryStore.writeLayerStyle('map_001', newStyle);
+
+      expect(await MapLibraryStore.readLayerStyle('map_001'), newStyle);
+    });
+
     test('reads empty active index when no file exists', () async {
       await MapLibraryStore.initialize();
       final index = await MapLibraryStore.readActiveMapIndex();

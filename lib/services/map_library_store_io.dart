@@ -8,6 +8,37 @@ import '../models/map_library_item.dart';
 import '../models/map_library_active_index.dart';
 import '../models/map_meta.dart';
 
+
+/// Installs a fully-written temporary file while preserving the previous
+/// target until the new file has been moved into place. The backup/restore
+/// sequence also supports platforms where rename cannot replace an existing
+/// file (notably Windows).
+Future<void> _installTemporaryFile(File temporary, File target) async {
+  final backup = File(
+    '${target.path}.backup-${DateTime.now().microsecondsSinceEpoch}',
+  );
+  var movedOriginal = false;
+  try {
+    if (await target.exists()) {
+      await target.rename(backup.path);
+      movedOriginal = true;
+    }
+    await temporary.rename(target.path);
+    if (movedOriginal && await backup.exists()) {
+      await backup.delete();
+    }
+  } catch (_) {
+    if (movedOriginal && await backup.exists() && !await target.exists()) {
+      await backup.rename(target.path);
+    }
+    rethrow;
+  } finally {
+    if (await temporary.exists()) {
+      await temporary.delete();
+    }
+  }
+}
+
 Future<Directory> _rootDirectory() async {
   final support = await getApplicationSupportDirectory();
   return Directory(p.join(support.path, 'maps_library'));
@@ -181,11 +212,7 @@ Future<void> writeOriginalSource(String id, List<int> bytes) async {
   final target = File(p.join(mapPath, 'original.$extension'));
   final temporary = File(p.join(mapPath, 'original.$extension.tmp'));
   await temporary.writeAsBytes(bytes, flush: true);
-  try {
-    await temporary.rename(target.path);
-  } finally {
-    if (await temporary.exists()) await temporary.delete();
-  }
+  await _installTemporaryFile(temporary, target);
 }
 
 
@@ -238,11 +265,7 @@ Future<void> writeGeoJson(String id, String geometry, String content) async {
   final target = File(p.join(mapPath, fileName));
   final temporary = File(p.join(mapPath, '$fileName.tmp'));
   await temporary.writeAsString(content, flush: true);
-  try {
-    await temporary.rename(target.path);
-  } finally {
-    if (await temporary.exists()) await temporary.delete();
-  }
+  await _installTemporaryFile(temporary, target);
 }
 
 
@@ -276,11 +299,7 @@ Future<void> writeLayerStyle(String id, String content) async {
   final target = File(p.join(mapPath, 'layer_style.json'));
   final temporary = File(p.join(mapPath, 'layer_style.json.tmp'));
   await temporary.writeAsString(content, flush: true);
-  try {
-    await temporary.rename(target.path);
-  } finally {
-    if (await temporary.exists()) await temporary.delete();
-  }
+  await _installTemporaryFile(temporary, target);
 }
 
 Future<MapLibraryActiveIndex> readActiveMapIndex() async {
