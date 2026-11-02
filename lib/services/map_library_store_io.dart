@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../models/map_library_item.dart';
+import '../models/map_library_active_index.dart';
 import '../models/map_meta.dart';
 
 Future<Directory> _rootDirectory() async {
@@ -148,5 +149,81 @@ Future<void> writeMeta(MapMeta meta) async {
     if (await temporary.exists()) {
       await temporary.delete();
     }
+  }
+}
+
+Future<MapLibraryActiveIndex> readActiveMapIndex() async {
+  final root = await _rootDirectory();
+  await root.create(recursive: true);
+  final file = File(p.join(root.path, 'active_layers.json'));
+  if (!await file.exists()) {
+    return MapLibraryActiveIndex(mapIds: const [], orphanIds: const []);
+  }
+
+  final decoded = jsonDecode(await file.readAsString());
+  if (decoded is! List) {
+    throw const FormatException('active_layers.json must contain a JSON array');
+  }
+  final ids = <String>[];
+  final seen = <String>{};
+  for (final value in decoded) {
+    if (value is! String || !MapMeta.isValidId(value)) {
+      throw const FormatException('active_layers.json contains an invalid map ID');
+    }
+    if (!seen.add(value)) {
+      throw FormatException('active_layers.json contains duplicate ID: $value');
+    }
+    ids.add(value);
+  }
+
+  final orphans = <String>[];
+  for (final id in ids) {
+    final folder = Directory(p.join(root.path, id));
+    if (!await folder.exists()) orphans.add(id);
+  }
+  return MapLibraryActiveIndex(mapIds: ids, orphanIds: orphans);
+}
+
+Future<void> writeActiveMapIds(List<String> ids) async {
+  final unique = <String>{};
+  for (final id in ids) {
+    if (!MapMeta.isValidId(id)) {
+      throw FormatException('Invalid active map ID: $id');
+    }
+    if (!unique.add(id)) {
+      throw FormatException('Duplicate active map ID: $id');
+    }
+  }
+
+  final root = await _rootDirectory();
+  await root.create(recursive: true);
+  final target = File(p.join(root.path, 'active_layers.json'));
+  final temporary = File(p.join(root.path, 'active_layers.json.tmp'));
+  final backup = File(
+    p.join(root.path, 'active_layers.json.backup-${DateTime.now().microsecondsSinceEpoch}'),
+  );
+
+  // Validate existing content before replacing it. Corruption requires
+  // explicit recovery rather than silently resetting the active list.
+  if (await target.exists()) {
+    await readActiveMapIndex();
+  }
+
+  await temporary.writeAsString(jsonEncode(ids), flush: true);
+  var movedOriginal = false;
+  try {
+    if (await target.exists()) {
+      await target.rename(backup.path);
+      movedOriginal = true;
+    }
+    await temporary.rename(target.path);
+    if (movedOriginal && await backup.exists()) await backup.delete();
+  } catch (_) {
+    if (movedOriginal && await backup.exists() && !await target.exists()) {
+      await backup.rename(target.path);
+    }
+    rethrow;
+  } finally {
+    if (await temporary.exists()) await temporary.delete();
   }
 }

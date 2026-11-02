@@ -1,4 +1,5 @@
 import '../models/map_library_item.dart';
+import '../models/map_library_active_index.dart';
 import '../models/map_meta.dart';
 
 final Map<String, MapMeta> _metadata = {};
@@ -24,4 +25,22 @@ Future<MapMeta> readMeta(String id) async {
 
 Future<void> writeMeta(MapMeta meta) async {
   _metadata[meta.id] = meta;
+}
+
+final List<String> _activeMapIds = [];
+
+Future<MapLibraryActiveIndex> readActiveMapIndex() async {
+  final orphans = _activeMapIds.where((id) => !_metadata.containsKey(id)).toList();
+  return MapLibraryActiveIndex(mapIds: _activeMapIds, orphanIds: orphans);
+}
+
+Future<void> writeActiveMapIds(List<String> ids) async {
+  final seen = <String>{};
+  for (final id in ids) {
+    if (!MapMeta.isValidId(id)) throw FormatException('Invalid active map ID: $id');
+    if (!seen.add(id)) throw FormatException('Duplicate active map ID: $id');
+  }
+  _activeMapIds
+    ..clear()
+    ..addAll(ids);
 }

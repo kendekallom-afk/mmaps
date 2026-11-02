@@ -197,6 +197,50 @@ void main() {
           : false,
     );
 
+    test('reads empty active index when no file exists', () async {
+      await MapLibraryStore.initialize();
+      final index = await MapLibraryStore.readActiveMapIndex();
+      expect(index.mapIds, isEmpty);
+      expect(index.orphanIds, isEmpty);
+    });
+
+    test('writes and reads active IDs and reports orphan IDs', () async {
+      await MapLibraryStore.initialize();
+      await Directory(p.join(libraryDirectory.path, 'map_001'))
+          .create(recursive: true);
+      await MapLibraryStore.writeMeta(sampleMeta());
+      await MapLibraryStore.writeActiveMapIds(['map_001', 'map_missing']);
+
+      final index = await MapLibraryStore.readActiveMapIndex();
+      expect(index.mapIds, ['map_001', 'map_missing']);
+      expect(index.orphanIds, ['map_missing']);
+    });
+
+    test('reports corrupt active index and refuses to overwrite it', () async {
+      await MapLibraryStore.initialize();
+      final file = File(p.join(libraryDirectory.path, 'active_layers.json'));
+      await file.writeAsString('{broken');
+
+      expect(MapLibraryStore.readActiveMapIndex(), throwsFormatException);
+      expect(
+        () => MapLibraryStore.writeActiveMapIds(['map_001']),
+        throwsFormatException,
+      );
+      expect(await file.readAsString(), '{broken');
+    });
+
+    test('rejects duplicate and invalid active IDs', () async {
+      await MapLibraryStore.initialize();
+      expect(
+        () => MapLibraryStore.writeActiveMapIds(['map_001', 'map_001']),
+        throwsFormatException,
+      );
+      expect(
+        () => MapLibraryStore.writeActiveMapIds(['../outside']),
+        throwsFormatException,
+      );
+    });
+
     test('rejects invalid IDs before accessing storage', () async {
       await MapLibraryStore.initialize();
 
