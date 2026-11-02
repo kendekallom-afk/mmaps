@@ -515,5 +515,60 @@ void main() {
 
       expect(() => MapLibraryStore.readMeta('../escape'), throwsFormatException);
     });
+
+    test('startup restores backup when target file is missing', () async {
+      final folder = Directory(p.join(libraryDirectory.path, 'map_001'));
+      await folder.create(recursive: true);
+      final backup = File(p.join(folder.path, 'meta.json.backup-100'));
+      await backup.writeAsString(jsonEncode(sampleMeta(name: 'Recovered').toJson()));
+
+      await MapLibraryStore.initialize();
+
+      expect((await MapLibraryStore.readMeta('map_001')).name, 'Recovered');
+      expect(await backup.exists(), isFalse);
+    });
+
+    test('startup keeps existing target and removes stale backup and temp', () async {
+      final folder = Directory(p.join(libraryDirectory.path, 'map_001'));
+      await folder.create(recursive: true);
+      final target = File(p.join(folder.path, 'meta.json'));
+      final backup = File(p.join(folder.path, 'meta.json.backup-100'));
+      final temporary = File(p.join(folder.path, 'meta.json.tmp'));
+      await target.writeAsString(jsonEncode(sampleMeta(name: 'Current').toJson()));
+      await backup.writeAsString(jsonEncode(sampleMeta(name: 'Old').toJson()));
+      await temporary.writeAsString('incomplete');
+
+      await MapLibraryStore.initialize();
+
+      expect((await MapLibraryStore.readMeta('map_001')).name, 'Current');
+      expect(await backup.exists(), isFalse);
+      expect(await temporary.exists(), isFalse);
+    });
+
+    test('startup cleans abandoned staging and deleting folders', () async {
+      final staging = Directory(p.join(libraryDirectory.path, '.tmp', 'map_001-nonce'));
+      final deleting = Directory(p.join(libraryDirectory.path, '.deleting', 'map_002-nonce'));
+      await staging.create(recursive: true);
+      await deleting.create(recursive: true);
+      await File(p.join(staging.path, 'partial')).writeAsString('partial');
+      await File(p.join(deleting.path, 'old')).writeAsString('old');
+
+      await MapLibraryStore.initialize();
+
+      expect((await Directory(p.join(libraryDirectory.path, '.tmp')).list()).isEmpty, isTrue);
+      expect((await Directory(p.join(libraryDirectory.path, '.deleting')).list()).isEmpty, isTrue);
+    });
+
+    test('startup restores active index backup if target is missing', () async {
+      final backup = File(p.join(libraryDirectory.path, 'active_layers.json.backup-100'));
+      await libraryDirectory.create(recursive: true);
+      await backup.writeAsString(jsonEncode(['map_001']));
+
+      await MapLibraryStore.initialize();
+
+      expect((await MapLibraryStore.readActiveMapIndex()).mapIds, ['map_001']);
+      expect(await backup.exists(), isFalse);
+    });
+
   });
 }
