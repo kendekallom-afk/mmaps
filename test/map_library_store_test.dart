@@ -325,6 +325,52 @@ void main() {
       );
     });
 
+
+    test('writes and reads per-map layer style JSON', () async {
+      await MapLibraryStore.initialize();
+      await Directory(p.join(libraryDirectory.path, 'map_001'))
+          .create(recursive: true);
+      await MapLibraryStore.writeMeta(sampleMeta());
+      const style = '{"polygon":{"fill":"#338855","opacity":0.4},'
+          '"line":{"color":"#112233","width":2},"point":{"visible":true}}';
+
+      await MapLibraryStore.writeLayerStyle('map_001', style);
+      expect(await MapLibraryStore.readLayerStyle('map_001'), style);
+      expect(
+        await File(p.join(libraryDirectory.path, 'map_001', 'layer_style.json'))
+            .exists(),
+        isTrue,
+      );
+    });
+
+    test('rejects malformed or non-object layer style JSON', () async {
+      await MapLibraryStore.initialize();
+      await Directory(p.join(libraryDirectory.path, 'map_001'))
+          .create(recursive: true);
+      await MapLibraryStore.writeMeta(sampleMeta());
+
+      expect(
+        () => MapLibraryStore.writeLayerStyle('map_001', '{broken'),
+        throwsFormatException,
+      );
+      expect(
+        () => MapLibraryStore.writeLayerStyle('map_001', '[]'),
+        throwsFormatException,
+      );
+    });
+
+    test('reports missing layer style clearly', () async {
+      await MapLibraryStore.initialize();
+      await Directory(p.join(libraryDirectory.path, 'map_001'))
+          .create(recursive: true);
+      await MapLibraryStore.writeMeta(sampleMeta());
+
+      expect(
+        MapLibraryStore.readLayerStyle('map_001'),
+        throwsStateError,
+      );
+    });
+
     test('reads empty active index when no file exists', () async {
       await MapLibraryStore.initialize();
       final index = await MapLibraryStore.readActiveMapIndex();
