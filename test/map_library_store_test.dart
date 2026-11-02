@@ -197,6 +197,67 @@ void main() {
           : false,
     );
 
+    test('writes and reads original KMZ bytes', () async {
+      await MapLibraryStore.initialize();
+      await Directory(p.join(libraryDirectory.path, 'map_001'))
+          .create(recursive: true);
+      await MapLibraryStore.writeMeta(sampleMeta());
+      final source = [0x50, 0x4b, 0x03, 0x04, 0x10, 0x20];
+
+      await MapLibraryStore.writeOriginalSource('map_001', source);
+      final loaded = await MapLibraryStore.readOriginalSource('map_001');
+
+      expect(loaded, source);
+      expect(
+        await File(p.join(libraryDirectory.path, 'map_001', 'original.kmz'))
+            .exists(),
+        isTrue,
+      );
+    });
+
+    test('writes original KML using metadata extension', () async {
+      await MapLibraryStore.initialize();
+      await Directory(p.join(libraryDirectory.path, 'map_001'))
+          .create(recursive: true);
+      await MapLibraryStore.writeMeta(
+        sampleMeta().copyWith(originalExtension: 'kml'),
+      );
+      const source = '<kml><Document/></kml>';
+
+      await MapLibraryStore.writeOriginalSource(
+        'map_001',
+        source.codeUnits,
+      );
+      final loaded = await MapLibraryStore.readOriginalSource('map_001');
+
+      expect(String.fromCharCodes(loaded), source);
+      expect(
+        await File(p.join(libraryDirectory.path, 'map_001', 'original.kml'))
+            .exists(),
+        isTrue,
+      );
+    });
+
+    test('reports missing original source clearly', () async {
+      await MapLibraryStore.initialize();
+      await Directory(p.join(libraryDirectory.path, 'map_001'))
+          .create(recursive: true);
+      await MapLibraryStore.writeMeta(sampleMeta());
+
+      expect(
+        MapLibraryStore.readOriginalSource('map_001'),
+        throwsStateError,
+      );
+    });
+
+    test('rejects writing original source for missing map folder', () async {
+      await MapLibraryStore.initialize();
+      await expectLater(
+        MapLibraryStore.writeOriginalSource('map_001', [1, 2, 3]),
+        throwsStateError,
+      );
+    });
+
     test('reads empty active index when no file exists', () async {
       await MapLibraryStore.initialize();
       final index = await MapLibraryStore.readActiveMapIndex();
