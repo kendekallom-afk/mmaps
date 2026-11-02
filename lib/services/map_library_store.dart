@@ -1,5 +1,5 @@
-import 'map_meta.dart';
-import 'map_library_item.dart';
+import '../models/map_meta.dart';
+import '../models/map_library_item.dart';
 import 'map_library_store_memory.dart'
     if (dart.library.io) 'map_library_store_io.dart' as backend;
 
