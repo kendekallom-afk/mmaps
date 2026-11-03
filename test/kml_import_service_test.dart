@@ -137,9 +137,16 @@ void main() {
   </Document>
 </kml>
 ''';
+    final pngBytes = Uint8List.fromList([
+      137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82,
+      0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0, 31, 21, 196, 137,
+      0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 96, 96, 96, 248,
+      15, 0, 1, 4, 1, 0, 95, 229, 195, 75, 0, 0, 0, 0, 73, 69, 78,
+      68, 174, 66, 96, 130,
+    ]);
     final archive = Archive()
       ..add(ArchiveFile.string('folder/doc.kml', kml))
-      ..add(ArchiveFile.bytes('folder/images/sheet.png', [1, 2, 3, 4]));
+      ..add(ArchiveFile.bytes('folder/images/sheet.png', pngBytes));
     final bytes = Uint8List.fromList(ZipEncoder().encode(archive));
 
     final map = service.parse(
@@ -151,7 +158,7 @@ void main() {
     expect(map.name, 'Raster map');
     expect(map.overlays, hasLength(1));
     expect(map.overlays.single.name, 'Sheet 1');
-    expect(map.overlays.single.bytes, [1, 2, 3, 4]);
+    expect(map.overlays.single.bytes, pngBytes);
   });
 
   test('rejects KML that has no renderable map features', () {
