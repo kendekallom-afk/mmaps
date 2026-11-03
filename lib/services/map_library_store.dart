@@ -1,8 +1,10 @@
+import 'dart:typed_data';
 import '../models/map_meta.dart';
 import '../models/map_library_item.dart';
 import '../models/map_library_active_index.dart';
 import 'map_library_store_memory.dart'
     if (dart.library.io) 'map_library_store_io.dart' as backend;
+import '../models/map_overlay_manifest.dart';
 
 export '../models/map_library_item.dart';
 export '../models/map_library_active_index.dart';
@@ -58,4 +60,28 @@ abstract final class MapLibraryStore {
   /// Replaces the active ID list. Corrupt existing data is never silently reset.
   static Future<void> writeActiveMapIds(List<String> ids) =>
       backend.writeActiveMapIds(ids);
+
+  /// Reads the GroundOverlay manifest for one map.
+  /// Returns an empty manifest when the map has no overlays.
+  static Future<MapOverlayManifest> readOverlayManifest(String id) =>
+      backend.readOverlayManifest(id);
+
+  /// Writes the GroundOverlay manifest for one map.
+  static Future<void> writeOverlayManifest(
+    String id,
+    MapOverlayManifest manifest,
+  ) => backend.writeOverlayManifest(id, manifest);
+
+    /// Writes the original overlay image bytes without modification.
+  static Future<void> writeOverlayAsset(
+    String id,
+    String fileName,
+    Uint8List bytes,
+  ) => backend.writeOverlayAsset(id, fileName, bytes);
+
+  /// Reads the original overlay image bytes.
+  static Future<Uint8List> readOverlayAsset(
+    String id,
+    String fileName,
+  ) => backend.readOverlayAsset(id, fileName);
 }

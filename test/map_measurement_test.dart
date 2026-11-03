@@ -29,31 +29,60 @@ void main() {
       await tester.tap(find.text('Measure Distance or Area'));
       await tester.pumpAndSettle();
 
+      final closePolygonButton = find.byWidgetPredicate(
+        (widget) =>
+            widget is IconButton && widget.tooltip == 'Tutup menjadi polygon',
+      );
+      expect(closePolygonButton, findsOneWidget);
+      expect(
+        tester.widget<IconButton>(closePolygonButton).onPressed,
+        isNull,
+      );
       expect(find.text('Jarak: 0 m'), findsOneWidget);
       expect(find.text('Titik: 0'), findsOneWidget);
 
-      await tester.tap(find.text('Tambah'));
+      await tester.tap(find.byTooltip('Tambah titik di tengah peta'));
       await tester.pump();
-      await tester.tap(find.text('Tambah'));
+      await tester.tap(find.byTooltip('Tambah titik di tengah peta'));
       await tester.pump();
-      await tester.tap(find.text('Tambah'));
+      await tester.tap(find.byTooltip('Tambah titik di tengah peta'));
       await tester.pump();
 
-      expect(find.text('Luas: 0 m²'), findsOneWidget);
+      expect(find.text('Luas sementara: 0 m²'), findsOneWidget);
+      expect(find.text('Titik: 3'), findsOneWidget);
+      expect(
+        tester.widget<IconButton>(closePolygonButton).onPressed,
+        isNotNull,
+      );
+
+      await tester.tap(find.byTooltip('Hapus titik terakhir'));
+      await tester.pump();
+      expect(find.text('Luas sementara: 0 m²'), findsNothing);
+      expect(find.text('Titik: 2'), findsOneWidget);
+      expect(
+        tester.widget<IconButton>(closePolygonButton).onPressed,
+        isNull,
+      );
+
+      await tester.tap(find.byTooltip('Tambah titik di tengah peta'));
+      await tester.pump();
+      expect(find.text('Luas sementara: 0 m²'), findsOneWidget);
       expect(find.text('Titik: 3'), findsOneWidget);
 
-      await tester.tap(find.text('Undo'));
+      await tester.tap(find.byTooltip('Hapus semua titik'));
       await tester.pump();
-      expect(find.text('Luas: 0 m²'), findsNothing);
-      expect(find.text('Titik: 2'), findsOneWidget);
-
-      await tester.tap(find.text('Clear'));
-      await tester.pump();
+      expect(find.text('Jarak: 0 m'), findsOneWidget);
       expect(find.text('Titik: 0'), findsOneWidget);
 
-      await tester.tap(find.text('Selesai'));
+      await tester.tap(find.byTooltip('Tambah titik di tengah peta'));
+      await tester.pump();
+      expect(find.text('Titik: 1'), findsOneWidget);
+
+      await tester.tap(find.byTooltip('Selesai dan hapus pengukuran'));
       await tester.pumpAndSettle();
       expect(find.text('Jarak: 0 m'), findsNothing);
+      expect(find.text('Titik: 1'), findsNothing);
+      expect(find.byTooltip('Tambah titik di tengah peta'), findsNothing);
     },
   );
 }

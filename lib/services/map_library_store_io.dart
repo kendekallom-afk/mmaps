@@ -1,5 +1,7 @@
+import 'dart:typed_data';
 import 'dart:convert';
 import 'dart:io';
+import 'overlay_image_validator.dart';
 
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -7,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 import '../models/map_library_item.dart';
 import '../models/map_library_active_index.dart';
 import '../models/map_meta.dart';
+import '../models/map_overlay_manifest.dart';
 
 /// Installs a fully-written temporary file while preserving the previous
 /// target until the new file has been moved into place. The backup/restore
@@ -160,6 +163,27 @@ Future<void> _emptyInternalDirectory(Directory directory) async {
   }
 }
 
+Future<MapOverlayManifest> _readOverlayManifestForRecovery(
+  Directory overlayDirectory,
+) async {
+  final manifestFile = File(p.join(overlayDirectory.path, 'overlays.json'));
+
+  await _rejectSymbolicLink(manifestFile.path);
+
+  if (!await manifestFile.exists()) {
+    return MapOverlayManifest(overlays: []);
+  }
+
+  final content = await manifestFile.readAsString();
+  final json = jsonDecode(content);
+
+  if (json is! Map<String, dynamic>) {
+    throw const FormatException('Invalid overlay manifest');
+  }
+
+  return MapOverlayManifest.fromJson(json);
+}
+
 Future<void> initializeLibrary() async {
   final root = await _rootDirectory();
   await root.create(recursive: true);
@@ -180,7 +204,57 @@ Future<void> initializeLibrary() async {
 
   await for (final entity in root.list(followLinks: false)) {
     if (entity is Directory && !p.basename(entity.path).startsWith('.')) {
+      // Pemulihan file utama peta.
       await _recoverBackupFiles(entity, allowedTargets: allowedMapFiles);
+
+      // Pemulihan manifest di folder overlays.
+      final overlayPath = p.join(entity.path, 'overlays');
+
+      final overlayType = await FileSystemEntity.type(
+        overlayPath,
+        followLinks: false,
+      );
+
+      if (overlayType == FileSystemEntityType.link) {
+        throw FileSystemException(
+          'Symbolic link is not allowed for overlays directory',
+          overlayPath,
+        );
+      }
+
+      if (overlayType == FileSystemEntityType.directory) {
+        final overlayDirectory = Directory(overlayPath);
+
+        // Tahap 1: Pulihkan manifest terlebih dahulu.
+        await _recoverBackupFiles(
+          overlayDirectory,
+          allowedTargets: {'overlays.json'},
+        );
+
+        // Tahap 2: Baca manifest untuk mengetahui file gambar resmi.
+        final manifestFile = File(
+          p.join(overlayDirectory.path, 'overlays.json'),
+        );
+
+        if (await manifestFile.exists()) {
+          final manifest = await _readOverlayManifestForRecovery(
+            overlayDirectory,
+          );
+
+          final allowedOverlayFiles = <String>{
+            'overlays.json',
+            ...manifest.overlays.map((overlay) => overlay.file),
+          };
+
+          // Tahap 3: Pulihkan backup gambar yang terdaftar.
+          await _recoverBackupFiles(
+            overlayDirectory,
+            allowedTargets: allowedOverlayFiles,
+          );
+        }
+      } else if (overlayType != FileSystemEntityType.notFound) {
+        throw FileSystemException('Invalid overlays directory', overlayPath);
+      }
     }
   }
 
@@ -463,6 +537,149 @@ Future<void> writeLayerStyle(String id, String content) async {
   final temporary = File(temporaryPath);
   await temporary.writeAsString(content, flush: true);
   await _installTemporaryFile(temporary, target);
+}
+
+Future<Directory> _overlayDirectory(String id) async {
+  final mapPath = await _validatedMapPath(id);
+  final mapFolder = Directory(mapPath);
+
+  if (!await mapFolder.exists()) {
+    throw StateError('Map folder not found: $id');
+  }
+
+  final overlayPath = p.join(mapPath, 'overlays');
+
+  final type = await FileSystemEntity.type(overlayPath, followLinks: false);
+
+  if (type == FileSystemEntityType.link) {
+    throw FileSystemException(
+      'Overlay directory cannot be a symbolic link',
+      overlayPath,
+    );
+  }
+
+  if (type != FileSystemEntityType.notFound &&
+      type != FileSystemEntityType.directory) {
+    throw FileSystemException('Overlay path is not a directory', overlayPath);
+  }
+
+  return Directory(overlayPath);
+}
+
+Future<MapOverlayManifest> readOverlayManifest(String id) async {
+  final folder = await _overlayDirectory(id);
+
+  if (!await folder.exists()) {
+    return MapOverlayManifest(overlays: const []);
+  }
+
+  final filePath = p.join(folder.path, 'overlays.json');
+  await _rejectSymbolicLink(filePath);
+
+  final file = File(filePath);
+
+  if (!await file.exists()) {
+    return MapOverlayManifest(overlays: const []);
+  }
+
+  final decoded = jsonDecode(await file.readAsString());
+
+  if (decoded is! Map<String, dynamic>) {
+    throw const FormatException('overlays.json must contain a JSON object');
+  }
+
+  return MapOverlayManifest.fromJson(decoded);
+}
+
+Future<void> writeOverlayManifest(
+  String id,
+  MapOverlayManifest manifest,
+) async {
+  manifest.validate();
+
+  final folder = await _overlayDirectory(id);
+  await folder.create(recursive: true);
+
+  final targetPath = p.join(folder.path, 'overlays.json');
+  final temporaryPath = p.join(folder.path, 'overlays.json.tmp');
+
+  await _rejectSymbolicLink(targetPath);
+  await _rejectSymbolicLink(temporaryPath);
+
+  final target = File(targetPath);
+  final temporary = File(temporaryPath);
+
+  await temporary.writeAsString(jsonEncode(manifest.toJson()), flush: true);
+
+  await _installTemporaryFile(temporary, target);
+}
+
+Future<File> _validatedOverlayAssetFile(String id, String fileName) async {
+  final folder = await _overlayDirectory(id);
+
+  if (!await folder.exists()) {
+    throw StateError('Overlay directory not found: $id');
+  }
+
+  // Manifest adalah satu-satunya acuan file overlay.
+  final manifest = await readOverlayManifest(id);
+
+  final matches = manifest.overlays.where(
+    (overlay) => overlay.file == fileName,
+  );
+
+  if (matches.length != 1) {
+    throw StateError('Overlay file not found in manifest: $fileName');
+  }
+
+  final file = File(p.join(folder.path, matches.single.file));
+
+  await _rejectSymbolicLink(file.path);
+
+  final type = await FileSystemEntity.type(file.path, followLinks: false);
+
+  if (type != FileSystemEntityType.notFound &&
+      type != FileSystemEntityType.file) {
+    throw FileSystemException('Overlay asset is not a regular file', file.path);
+  }
+
+  return file;
+}
+
+
+Future<void> writeOverlayAsset(
+  String id,
+  String fileName,
+  Uint8List bytes,
+) async {
+  final target = await _validatedOverlayAssetFile(id, fileName);
+
+  final manifest = await readOverlayManifest(id);
+
+  final asset = manifest.overlays.singleWhere(
+    (item) => item.file == fileName,
+  );
+
+  OverlayImageValidator.validate(asset.imageFormat, bytes);
+
+  final temporary = File('${target.path}.tmp');
+
+  await _rejectSymbolicLink(temporary.path);
+
+  await temporary.writeAsBytes(bytes, flush: true);
+
+  await _installTemporaryFile(temporary, target);
+}
+
+
+Future<Uint8List> readOverlayAsset(String id, String fileName) async {
+  final file = await _validatedOverlayAssetFile(id, fileName);
+
+  if (!await file.exists()) {
+    throw StateError('Overlay asset not found: $fileName');
+  }
+
+  return file.readAsBytes();
 }
 
 Future<MapLibraryActiveIndex> readActiveMapIndex() async {

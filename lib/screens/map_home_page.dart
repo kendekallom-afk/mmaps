@@ -776,6 +776,11 @@ class _MapHomePageState extends State<MapHomePage> with WidgetsBindingObserver {
                       ? null
                       : _undoMeasurePoint,
                 ),
+                circleButton(
+                  icon: Icons.delete_outline,
+                  tooltip: 'Hapus semua titik',
+                  onPressed: _measurePoints.isEmpty ? null : _clearMeasurePoints,
+                ),
                 symbolButton(
                   symbol: '+',
                   tooltip: 'Tambah titik di tengah peta',

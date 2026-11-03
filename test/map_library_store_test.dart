@@ -1,5 +1,5 @@
 // ignore_for_file: depend_on_referenced_packages
-
+import 'dart:typed_data';
 import 'dart:convert';
 import 'dart:io';
 
@@ -9,6 +9,7 @@ import 'package:mmaps_flutter/services/map_library_store.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
+import 'package:mmaps_flutter/models/map_overlay_manifest.dart';
 
 class FakePathProviderPlatform extends Fake
     with MockPlatformInterfaceMixin
@@ -660,5 +661,347 @@ void main() {
       expect(await target.exists(), isTrue);
       expect(await backup.exists(), isTrue);
     });
+    test('reads an empty overlay manifest when none exists', () async {
+      await MapLibraryStore.initialize();
+
+      await Directory(p.join(libraryDirectory.path, 'map_001'))
+          .create(recursive: true);
+      await MapLibraryStore.writeMeta(sampleMeta());
+
+      final manifest = await MapLibraryStore.readOverlayManifest('map_001');
+
+      expect(manifest.overlays, isEmpty);
+    });
+
+    test('writes and reads overlay manifest', () async {
+      await MapLibraryStore.initialize();
+
+      await Directory(p.join(libraryDirectory.path, 'map_001'))
+          .create(recursive: true);
+      await MapLibraryStore.writeMeta(sampleMeta());
+
+      const overlay = MapOverlayAsset(
+        id: 'overlay_0001',
+        name: 'Citra Udara',
+        file: 'overlay_0001.png',
+        imageFormat: 'png',
+        bounds: MapOverlayBounds(
+          north: -2.4,
+          south: -2.5,
+          east: 119.3,
+          west: 119.2,
+        ),
+      );
+
+      final manifest = MapOverlayManifest(overlays: const [overlay]);
+
+      await MapLibraryStore.writeOverlayManifest('map_001', manifest);
+
+      final loaded = await MapLibraryStore.readOverlayManifest('map_001');
+
+      expect(loaded.overlays, hasLength(1));
+      expect(loaded.overlays.single.id, 'overlay_0001');
+      expect(loaded.overlays.single.name, 'Citra Udara');
+
+      final file = File(
+        p.join(libraryDirectory.path, 'map_001', 'overlays', 'overlays.json'),
+      );
+
+      expect(await file.exists(), isTrue);
+    });
+
+    
+    test('writes and reads overlay asset with identical bytes', () async {
+      await MapLibraryStore.initialize();
+
+      final mapFolder = Directory(p.join(libraryDirectory.path, 'map_001'));
+      await mapFolder.create(recursive: true);
+      await MapLibraryStore.writeMeta(sampleMeta());
+
+      const overlay = MapOverlayAsset(
+        id: 'overlay_0001',
+        name: 'Citra Udara',
+        file: 'overlay_0001.png',
+        imageFormat: 'png',
+        bounds: MapOverlayBounds(
+          north: -2.4,
+          south: -2.5,
+          east: 119.3,
+          west: 119.2,
+        ),
+      );
+
+      await MapLibraryStore.writeOverlayManifest(
+        'map_001',
+        MapOverlayManifest(overlays: const [overlay]),
+      );
+
+      // Signature PNG yang benar + data tambahan untuk pengujian.
+      final source = Uint8List.fromList([
+        0x89, 0x50, 0x4E, 0x47,
+        0x0D, 0x0A, 0x1A, 0x0A,
+        0x10, 0x20, 0x30, 0x40,
+      ]);
+
+      await MapLibraryStore.writeOverlayAsset(
+        'map_001',
+        'overlay_0001.png',
+        source,
+      );
+
+      final loaded = await MapLibraryStore.readOverlayAsset(
+        'map_001',
+        'overlay_0001.png',
+      );
+
+      expect(loaded, orderedEquals(source));
+
+      final storedFile = File(
+        p.join(
+          libraryDirectory.path,
+          'map_001',
+          'overlays',
+          'overlay_0001.png',
+        ),
+      );
+
+      expect(await storedFile.exists(), isTrue);
+      expect(await storedFile.readAsBytes(), orderedEquals(source));
+    });
+
+
+    test('rejects overlay asset not registered in manifest', () async {
+      await MapLibraryStore.initialize();
+
+      await Directory(p.join(libraryDirectory.path, 'map_001'))
+          .create(recursive: true);
+      await MapLibraryStore.writeMeta(sampleMeta());
+
+      const overlay = MapOverlayAsset(
+        id: 'overlay_0001',
+        name: 'Citra Udara',
+        file: 'overlay_0001.png',
+        imageFormat: 'png',
+        bounds: MapOverlayBounds(
+          north: -2.4,
+          south: -2.5,
+          east: 119.3,
+          west: 119.2,
+        ),
+      );
+
+      await MapLibraryStore.writeOverlayManifest(
+        'map_001',
+        MapOverlayManifest(overlays: const [overlay]),
+      );
+
+      await expectLater(
+        MapLibraryStore.writeOverlayAsset(
+          'map_001',
+          'overlay_9999.png',
+          Uint8List.fromList([1, 2, 3]),
+        ),
+        throwsStateError,
+      );
+
+      await expectLater(
+        MapLibraryStore.readOverlayAsset('map_001', 'overlay_9999.png'),
+        throwsStateError,
+      );
+    });
+
+    test('rejects overlay asset path traversal', () async {
+      await MapLibraryStore.initialize();
+
+      await Directory(p.join(libraryDirectory.path, 'map_001'))
+          .create(recursive: true);
+      await MapLibraryStore.writeMeta(sampleMeta());
+
+      const overlay = MapOverlayAsset(
+        id: 'overlay_0001',
+        name: 'Citra Udara',
+        file: 'overlay_0001.png',
+        imageFormat: 'png',
+        bounds: MapOverlayBounds(
+          north: -2.4,
+          south: -2.5,
+          east: 119.3,
+          west: 119.2,
+        ),
+      );
+
+      await MapLibraryStore.writeOverlayManifest(
+        'map_001',
+        MapOverlayManifest(overlays: const [overlay]),
+      );
+
+      await expectLater(
+        MapLibraryStore.writeOverlayAsset(
+          'map_001',
+          '../outside.png',
+          Uint8List.fromList([1, 2, 3]),
+        ),
+        throwsStateError,
+      );
+
+      await expectLater(
+        MapLibraryStore.readOverlayAsset('map_001', '../outside.png'),
+        throwsStateError,
+      );
+    });
+
+    test('startup restores overlay asset when target is missing', () async {
+  final meta = sampleMeta();
+
+  final mapDirectory = Directory(
+    '${libraryDirectory.path}/${meta.id}',
+  );
+
+  await mapDirectory.create(recursive: true);
+
+  await MapLibraryStore.writeMeta(meta);
+
+  final manifest = MapOverlayManifest(
+    overlays: [
+      MapOverlayAsset(
+        id: 'overlay_0001',
+        name: 'Citra Udara',
+        file: 'overlay_0001.png',
+        imageFormat: 'png',
+        bounds: MapOverlayBounds(
+          north: -2.4,
+          south: -2.5,
+          east: 119.3,
+          west: 119.2,
+        ),
+      ),
+    ],
+  );
+
+  await MapLibraryStore.writeOverlayManifest(meta.id, manifest);
+
+  final overlayDirectory = Directory(
+    '${libraryDirectory.path}/${meta.id}/overlays',
+  );
+
+  final backupFile = File(
+    '${overlayDirectory.path}/overlay_0001.png.backup-123456',
+  );
+
+  final originalBytes = Uint8List.fromList([1, 2, 3, 4, 5]);
+  await backupFile.writeAsBytes(originalBytes);
+
+  await MapLibraryStore.initialize();
+
+  final restoredFile = File(
+    '${overlayDirectory.path}/overlay_0001.png',
+  );
+
+  expect(await restoredFile.exists(), isTrue);
+  expect(await restoredFile.readAsBytes(), equals(originalBytes));
+  expect(await backupFile.exists(), isFalse);
+});
+
+  test('startup keeps existing overlay asset and removes stale backup', () async {
+    final meta = sampleMeta();
+
+    final mapDirectory = Directory(
+      '${libraryDirectory.path}/${meta.id}',
+    );
+
+    await mapDirectory.create(recursive: true);
+    await MapLibraryStore.writeMeta(meta);
+
+    final manifest = MapOverlayManifest(
+      overlays: [
+        MapOverlayAsset(
+          id: 'overlay_0001',
+          name: 'Citra Udara',
+          file: 'overlay_0001.png',
+          imageFormat: 'png',
+          bounds: MapOverlayBounds(
+            north: -2.4,
+            south: -2.5,
+            east: 119.3,
+            west: 119.2,
+          ),
+        ),
+      ],
+    );
+
+    await MapLibraryStore.writeOverlayManifest(meta.id, manifest);
+
+    final overlayDirectory = Directory(
+      '${libraryDirectory.path}/${meta.id}/overlays',
+    );
+
+    final targetFile = File(
+      '${overlayDirectory.path}/overlay_0001.png',
+    );
+
+    final backupFile = File(
+      '${overlayDirectory.path}/overlay_0001.png.backup-123456',
+    );
+
+    final targetBytes = Uint8List.fromList([1, 2, 3]);
+    final backupBytes = Uint8List.fromList([9, 8, 7]);
+
+    await targetFile.writeAsBytes(targetBytes);
+    await backupFile.writeAsBytes(backupBytes);
+
+    await MapLibraryStore.initialize();
+
+    expect(await targetFile.readAsBytes(), equals(targetBytes));
+    expect(await backupFile.exists(), isFalse);
+  });
+
+  test('startup ignores backup for unregistered overlay asset', () async {
+    final meta = sampleMeta();
+
+    final mapDirectory = Directory(
+      '${libraryDirectory.path}/${meta.id}',
+    );
+
+    await mapDirectory.create(recursive: true);
+    await MapLibraryStore.writeMeta(meta);
+
+    final manifest = MapOverlayManifest(
+      overlays: [
+        MapOverlayAsset(
+          id: 'overlay_0001',
+          name: 'Citra Udara',
+          file: 'overlay_0001.png',
+          imageFormat: 'png',
+          bounds: MapOverlayBounds(
+            north: -2.4,
+            south: -2.5,
+            east: 119.3,
+            west: 119.2,
+          ),
+        ),
+      ],
+    );
+
+    await MapLibraryStore.writeOverlayManifest(meta.id, manifest);
+
+    final overlayDirectory = Directory(
+      '${libraryDirectory.path}/${meta.id}/overlays',
+    );
+
+    final backupFile = File(
+      '${overlayDirectory.path}/overlay_9999.png.backup-123456',
+    );
+
+    await backupFile.writeAsBytes(Uint8List.fromList([1, 2, 3]));
+
+    await MapLibraryStore.initialize();
+
+    final unexpectedTarget = File(
+      '${overlayDirectory.path}/overlay_9999.png',
+    );
+
+    expect(await unexpectedTarget.exists(), isFalse);
+    expect(await backupFile.exists(), isTrue);
+  });
   });
 }

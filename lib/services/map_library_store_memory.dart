@@ -1,8 +1,12 @@
 import 'dart:convert';
+import 'dart:typed_data';
+import 'overlay_image_validator.dart';
 
 import '../models/map_library_item.dart';
 import '../models/map_library_active_index.dart';
 import '../models/map_meta.dart';
+import '../models/map_overlay_manifest.dart';
+
 
 final Map<String, MapMeta> _metadata = {};
 
@@ -128,4 +132,98 @@ Future<void> writeLayerStyle(String id, String content) async {
   if (!_metadata.containsKey(id)) throw StateError('Map not found: $id');
   _validateLayerStyle(content);
   _layerStyles[id] = content;
+}
+
+final Map<String, MapOverlayManifest> _overlayManifests = {};
+
+Future<MapOverlayManifest> readOverlayManifest(String id) async {
+  if (!MapMeta.isValidId(id)) {
+    throw FormatException('Invalid map ID: $id');
+  }
+  if (!_metadata.containsKey(id)) {
+    throw StateError('Map not found: $id');
+  }
+
+  return _overlayManifests[id] ??
+      MapOverlayManifest(overlays: const []);
+}
+
+Future<void> writeOverlayManifest(
+  String id,
+  MapOverlayManifest manifest,
+) async {
+  if (!MapMeta.isValidId(id)) {
+    throw FormatException('Invalid map ID: $id');
+  }
+  if (!_metadata.containsKey(id)) {
+    throw StateError('Map not found: $id');
+  }
+
+  manifest.validate();
+  _overlayManifests[id] = manifest;
+}
+
+final Map<String, Map<String, Uint8List>> _overlayAssets = {};
+
+Future<void> writeOverlayAsset(
+  String id,
+  String fileName,
+  Uint8List bytes,
+) async {
+  if (!MapMeta.isValidId(id)) {
+    throw FormatException('Invalid map ID: $id');
+  }
+
+  if (!_metadata.containsKey(id)) {
+    throw StateError('Map not found: $id');
+  }
+
+  final manifest = await readOverlayManifest(id);
+
+  final asset = manifest.overlays.where(
+    (item) => item.file == fileName,
+  );
+
+  if (asset.length != 1) {
+  throw StateError('Overlay file not found in manifest: $fileName');
+  }
+
+  OverlayImageValidator.validate(
+    asset.single.imageFormat,
+    bytes,
+  );
+
+  (_overlayAssets[id] ??= {})[fileName] =
+      Uint8List.fromList(bytes);
+}
+
+Future<Uint8List> readOverlayAsset(
+  String id,
+  String fileName,
+) async {
+  if (!MapMeta.isValidId(id)) {
+    throw FormatException('Invalid map ID: $id');
+  }
+
+  if (!_metadata.containsKey(id)) {
+    throw StateError('Map not found: $id');
+  }
+
+  final manifest = await readOverlayManifest(id);
+
+  final asset = manifest.overlays.where(
+    (item) => item.file == fileName,
+  );
+
+  if (asset.length != 1) {
+    throw StateError('Overlay file not found in manifest: $fileName');
+  }
+
+  final bytes = _overlayAssets[id]?[fileName];
+
+  if (bytes == null) {
+    throw StateError('Overlay asset not found: $fileName');
+  }
+
+  return Uint8List.fromList(bytes);
 }
