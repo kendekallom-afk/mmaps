@@ -34,17 +34,42 @@ class GeoJsonHelper {
 
   /// Memastikan linear ring poligon tertutup (first coordinate == last coordinate)
   /// dan memenuhi syarat GeoJSON RFC 7946 (minimal 4 koordinat).
-  static List<List<double>> _closeLinearRing(List<LatLng> points) {
+  static List<List<double>> _closeLinearRing(
+    List<LatLng> points, [
+    List<double?> altitudes = const [],
+  ]) {
     if (points.isEmpty) return [];
-    // Urutan koordinat GeoJSON: [longitude, latitude]
-    final ring = points.map((p) => [p.longitude, p.latitude]).toList();
+    final ring = _coordinateSequence(points, altitudes, 'polygon ring');
     if (ring.length >= 3) {
       if (ring.first[0] != ring.last[0] || ring.first[1] != ring.last[1]) {
-        ring.add([ring.first[0], ring.first[1]]);
+        ring.add(List<double>.of(ring.first));
       }
     }
     return ring;
   }
+
+  static List<List<double>> _coordinateSequence(
+    List<LatLng> coordinates,
+    List<double?> altitudes,
+    String label,
+  ) {
+    if (altitudes.isNotEmpty && altitudes.length != coordinates.length) {
+      throw ArgumentError(
+        'Altitude data for $label must match its coordinate count.',
+      );
+    }
+
+    return [
+      for (var i = 0; i < coordinates.length; i++)
+        _coordinate(coordinates[i], altitudes.isEmpty ? null : altitudes[i]),
+    ];
+  }
+
+  static List<double> _coordinate(LatLng coordinate, [double? altitude]) => [
+    coordinate.longitude,
+    coordinate.latitude,
+    ?altitude,
+  ];
 
   /// Mengonversi satu [ImportedMap] menjadi FeatureCollection GeoJSON gabungan
   static Map<String, dynamic> importedMapToGeoJson(ImportedMap map) {
@@ -52,13 +77,24 @@ class GeoJsonHelper {
 
     // 1. Poligon
     for (final poly in map.polygons) {
-      final exterior = _closeLinearRing(poly.points);
+      if (poly.holeAltitudes.isNotEmpty &&
+          poly.holeAltitudes.length != poly.holes.length) {
+        throw ArgumentError(
+          'Altitude data for polygon holes must match its ring count.',
+        );
+      }
+
+      final exterior = _closeLinearRing(poly.points, poly.altitudes);
       if (exterior.length < 4) continue;
 
-      final holes = poly.holes
-          .map(_closeLinearRing)
-          .where((ring) => ring.length >= 4)
-          .toList();
+      final holes = <List<List<double>>>[];
+      for (var i = 0; i < poly.holes.length; i++) {
+        final hole = _closeLinearRing(
+          poly.holes[i],
+          poly.holeAltitudes.isEmpty ? const [] : poly.holeAltitudes[i],
+        );
+        if (hole.length >= 4) holes.add(hole);
+      }
 
       features.add({
         'type': 'Feature',
@@ -83,9 +119,11 @@ class GeoJsonHelper {
         'type': 'Feature',
         'geometry': {
           'type': 'LineString',
-          'coordinates': line.points
-              .map((p) => [p.longitude, p.latitude])
-              .toList(),
+          'coordinates': _coordinateSequence(
+            line.points,
+            line.altitudes,
+            'line',
+          ),
         },
         'properties': {
           'name': line.name,
@@ -102,7 +140,7 @@ class GeoJsonHelper {
         'type': 'Feature',
         'geometry': {
           'type': 'Point',
-          'coordinates': [pt.point.longitude, pt.point.latitude],
+          'coordinates': _coordinate(pt.point, pt.altitude),
         },
         'properties': {
           'name': pt.name,
@@ -130,13 +168,24 @@ class GeoJsonHelper {
     for (final map in maps) {
       // 1. Poligon
       for (final poly in map.polygons) {
-        final exterior = _closeLinearRing(poly.points);
+        if (poly.holeAltitudes.isNotEmpty &&
+            poly.holeAltitudes.length != poly.holes.length) {
+          throw ArgumentError(
+            'Altitude data for polygon holes must match its ring count.',
+          );
+        }
+
+        final exterior = _closeLinearRing(poly.points, poly.altitudes);
         if (exterior.length < 4) continue;
 
-        final holes = poly.holes
-            .map(_closeLinearRing)
-            .where((ring) => ring.length >= 4)
-            .toList();
+        final holes = <List<List<double>>>[];
+        for (var i = 0; i < poly.holes.length; i++) {
+          final hole = _closeLinearRing(
+            poly.holes[i],
+            poly.holeAltitudes.isEmpty ? const [] : poly.holeAltitudes[i],
+          );
+          if (hole.length >= 4) holes.add(hole);
+        }
 
         polygonFeatures.add({
           'type': 'Feature',
@@ -162,9 +211,11 @@ class GeoJsonHelper {
           'type': 'Feature',
           'geometry': {
             'type': 'LineString',
-            'coordinates': line.points
-                .map((p) => [p.longitude, p.latitude])
-                .toList(),
+            'coordinates': _coordinateSequence(
+              line.points,
+              line.altitudes,
+              'line',
+            ),
           },
           'properties': {
             'name': line.name,
@@ -182,7 +233,7 @@ class GeoJsonHelper {
           'type': 'Feature',
           'geometry': {
             'type': 'Point',
-            'coordinates': [pt.point.longitude, pt.point.latitude],
+            'coordinates': _coordinate(pt.point, pt.altitude),
           },
           'properties': {
             'name': pt.name,

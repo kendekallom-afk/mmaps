@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
+import 'map_overlay_manifest.dart';
+
 class ImportedMap {
   final String id;
   final String name;
@@ -44,11 +46,13 @@ class ImportedMap {
 class MapPointFeature {
   final String name;
   final LatLng point;
+  final double? altitude;
   final Color color;
 
   const MapPointFeature({
     required this.name,
     required this.point,
+    this.altitude,
     required this.color,
   });
 }
@@ -56,12 +60,14 @@ class MapPointFeature {
 class MapLineFeature {
   final String name;
   final List<LatLng> points;
+  final List<double?> altitudes;
   final Color color;
   final double width;
 
   const MapLineFeature({
     required this.name,
     required this.points,
+    this.altitudes = const [],
     required this.color,
     this.width = 3,
   });
@@ -70,14 +76,18 @@ class MapLineFeature {
 class MapPolygonFeature {
   final String name;
   final List<LatLng> points;
+  final List<double?> altitudes;
   final List<List<LatLng>> holes;
+  final List<List<double?>> holeAltitudes;
   final Color fillColor;
   final Color borderColor;
 
   const MapPolygonFeature({
     required this.name,
     required this.points,
+    this.altitudes = const [],
     required this.holes,
+    this.holeAltitudes = const [],
     required this.fillColor,
     required this.borderColor,
   });
@@ -87,10 +97,12 @@ class MapRasterOverlay {
   final String name;
   final Uint8List bytes;
   final LatLngBounds bounds;
+  final MapOverlayBounds? sourceBounds;
 
   const MapRasterOverlay({
     required this.name,
     required this.bytes,
     required this.bounds,
+    this.sourceBounds,
   });
 }

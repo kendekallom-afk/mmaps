@@ -114,5 +114,100 @@ void main() {
       expect(defaultPolygon['properties']['borderWidth'], 0.0);
       expect(defaultPolygon['properties']['layerOpacity'], 1.0);
     });
+
+    test('preserves 2D and 3D coordinates in all GeoJSON conversion paths', () {
+      final map = ImportedMap(
+        id: 'dimensions',
+        name: 'Dimensions',
+        fileName: 'dimensions.kml',
+        points: const [
+          MapPointFeature(
+            name: '2D point',
+            point: LatLng(10, 20),
+            color: Colors.red,
+          ),
+          MapPointFeature(
+            name: '3D point',
+            point: LatLng(11, 21),
+            altitude: 0,
+            color: Colors.red,
+          ),
+        ],
+        lines: const [
+          MapLineFeature(
+            name: 'Mixed line',
+            points: [LatLng(30, 40), LatLng(31, 41), LatLng(32, 42)],
+            altitudes: [0, -5, null],
+            color: Colors.blue,
+          ),
+        ],
+        polygons: const [
+          MapPolygonFeature(
+            name: '3D polygon',
+            points: [
+              LatLng(1, 1),
+              LatLng(4, 1),
+              LatLng(4, 4),
+              LatLng(1, 4),
+              LatLng(1, 1),
+            ],
+            altitudes: [100, 101, 102, 103, 100],
+            holes: [
+              [
+                LatLng(2, 2),
+                LatLng(3, 2),
+                LatLng(3, 3),
+                LatLng(2, 3),
+                LatLng(2, 2),
+              ],
+            ],
+            holeAltitudes: [
+              [0, -1, -2, -3, 0],
+            ],
+            fillColor: Colors.green,
+            borderColor: Colors.black,
+          ),
+        ],
+        overlays: const [],
+      );
+
+      expect(map.bounds!.southWest.longitude, 1);
+      expect(map.bounds!.southWest.latitude, 1);
+      expect(map.bounds!.northEast.longitude, 42);
+      expect(map.bounds!.northEast.latitude, 32);
+
+      final collections = GeoJsonHelper.fromImportedMaps([map]);
+      final points = (collections.points['features'] as List)
+          .cast<Map<String, dynamic>>();
+      expect(points[0]['geometry']['coordinates'], [20.0, 10.0]);
+      expect(points[1]['geometry']['coordinates'], [21.0, 11.0, 0.0]);
+
+      final lines = (collections.lines['features'] as List)
+          .cast<Map<String, dynamic>>();
+      expect(lines.single['geometry']['coordinates'], [
+        [40.0, 30.0, 0.0],
+        [41.0, 31.0, -5.0],
+        [42.0, 32.0],
+      ]);
+
+      final polygons = (collections.polygons['features'] as List)
+          .cast<Map<String, dynamic>>();
+      final rings = polygons.single['geometry']['coordinates'] as List;
+      expect(rings[0].first, [1.0, 1.0, 100.0]);
+      expect(rings[0].last, [1.0, 1.0, 100.0]);
+      expect(rings[1], [
+        [2.0, 2.0, 0.0],
+        [2.0, 3.0, -1.0],
+        [3.0, 3.0, -2.0],
+        [3.0, 2.0, -3.0],
+        [2.0, 2.0, 0.0],
+      ]);
+
+      final combined =
+          GeoJsonHelper.importedMapToGeoJson(map)['features'] as List;
+      expect(combined[0]['geometry']['coordinates'][0][0], [1.0, 1.0, 100.0]);
+      expect(combined[1]['geometry']['coordinates'][1], [41.0, 31.0, -5.0]);
+      expect(combined[3]['geometry']['coordinates'], [21.0, 11.0, 0.0]);
+    });
   });
 }
